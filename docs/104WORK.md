@@ -7,7 +7,7 @@ The user's two requested journey changes are **change destination during a route
 ## Start here tomorrow
 
 1. Reproduce and fix the phone map disappearing after Settings or another screen, then returning to Map. Verify on the actual installed S24 app.
-2. Expose and qualify a visible phone Follow/recenter control, including returning to Map during playback; investigate and correct the reported dot/route-line offset in the supplied screenshot, comparing both apps.
+2. Expose and qualify a visible phone Follow/recenter control, including returning to Map during playback; investigate dot/route-line alignment and the desktop map click that clears the active route while flight playback continues. Compare both apps.
 3. Implement phase-aware remaining-route edits for destination and airports, retaining progress and required radio gates.
 4. Deliver all seven selected usability additions U1–U7 below.
 5. Add gas-only Vacation planning, vehicle/starting-fuel inputs, station stops, speed-aware estimated MPG, hotel budgets and total cost/ETA; revise both interfaces as needed.
@@ -39,6 +39,25 @@ Draw the route from geometry consistent with actual provider progression, with b
 - The phone remains authoritative for submitted location, active phase, radio observations, playback and approvals. The map renderer never moves the provider merely because a destination or airport was selected.
 
 Source references: [desktop follow and planner](../desktop/ui/src/app.ts), [mobile controls](../android/app/src/main/kotlin/dev/localspoof/android/MobileUi.kt), [domain prepare/commit and flight phases](../android/session-domain/src/main/kotlin/dev/localspoof/domain/Session.kt), [current motion handoff](MOTION_SPEED_FLIGHT_HANDOFF_SOL_6_1.md).
+
+## Desktop map click removes the active route — unresolved user report
+
+The user reports clicking the desktop map during an active flight: the **whole route disappeared**, but the phone continued flying to its destination. This is a display/editor ownership defect, not evidence that the phone stopped or accepted a new destination. Record it as a priority regression alongside map return and dot alignment. No device reproduction is claimed in this documentation turn.
+
+A narrow source inspection is consistent with the report: `setEndpoint()` writes the selected draft endpoint and calls `edit()`, which clears shared `route` and `segments` arrays, invalidates the prepared draft and redraws. Those arrays are also used to draw the active journey. This is a concrete investigation lead, not a complete runtime diagnosis. Source changes are deferred to the next implementation session.
+
+Required behavior:
+
+- A normal map click during playback must not erase the active route or silently change the phone's journey. Offer a selected-place pin and explicit **Change destination / Add stop** actions, or stage a change only when an explicit endpoint-picking mode is active.
+- Keep **active phone-approved journey geometry** separate from **draft/candidate geometry** and endpoint fields. Invalidating a prepared draft may clear its candidate preview; it must not clear the active route, active ETA, phase, confirmed dot or follow state. Display the active endpoint/airports from the active plan rather than replacing their labels with uncommitted selections.
+- Preserve the active route during search, endpoint picking, speed-field drafts, airport selection, preview loading and validation failure. If a candidate is displayed, label and distinguish it visibly from the active journey; never imply that the candidate is already playing.
+- Provide **Cancel change / Back to active route**. This discards the candidate and restores the active presentation immediately, without restarting playback, replaying completed legs, changing radios or moving the dot. It must not depend on obtaining another online route.
+- Only **Apply change**, followed by the phone's accepted remaining-journey update, can replace the active route and labels. Keep the old presentation if submission fails. Fence late candidate results so they cannot overwrite a newer plan or reappear after Cancel/Stop.
+- Reuse the same separation for Drive, Walk and all flight phases, as well as automatic fuel stops and hotel edits. During an airborne diversion, the current flight geometry remains visible until the accepted diversion replaces its future portion; selecting another airport alone does not erase or restart the flight.
+- If an already applied edit is undone, use the one-edit undo/replan-from-current-point behavior; do not confuse it with cancelling an unapplied draft or rewinding the airplane/car.
+- Active geometry remains bounded and in RAM, keyed to the acknowledged journey/generation. Respect existing Stop, approval-expiry and disconnect privacy rules; genuine loss of authority may clear private state with an explanation. An ordinary map click must not be treated as one of those lifecycle events.
+
+Do not add an automatic movement restart or replan merely to bring the line back. Restore valid active geometry from the retained authoritative plan/snapshot and fix editor/render ownership. Qualify marker animation against the **active** geometry while a candidate is being edited; a cleared draft must not force a moving road dot into straight-line fallback.
 
 ## Requested camera improvement: follow the dot
 
@@ -198,6 +217,7 @@ Windows and Android should use the same actions and outcomes. When the desktop s
 19. Verify any speed/MPG model against reviewed reference cases and bounds; without suitable data, disclose the constant editable MPG fallback. Changing speed does not make assumed consumption measured telemetry.
 20. Test compact Android/Windows cost/MPG/ETA summaries, accessible large font, narrow screens and input insets without obscuring the map or Stop. EV charging remains unavailable.
 21. Compare the actual submitted point, rendered dot and route geometry on both apps during road corners and flight legs; confirm alignment through navigation return, zoom, bearing, pitch and the antimeridian. An initial physical DEVICE dot outside a proposed route is not itself a simulation alignment failure.
+22. On a paired active flight, click elsewhere on the desktop map; verify the route remains visible and phone destination/phase stay unchanged. Repeat for Drive/Walk, paused/holding playback, airport picking, fuel/hotel edits and the phone map. Candidate previews stay separate; Cancel restores the active view, failure leaves it intact, and Apply switches only after the phone accepts. Late previews, Cancel, Stop and disconnect cannot restore an obsolete or unauthorized route.
 
 ## Laptop continuation and what Git preserves
 
@@ -221,4 +241,4 @@ Future release APK updates must use the existing signing identity. Transfer the 
 
 An alternative is configured remote access to this original computer, where its tools and files stay available; it must remain online. Supported Codex/ChatGPT remote connections and explicit chat handoff can retain a conversation/host context, but they are a configured workflow, not automatic Git/workspace replication. Availability depends on the client and rollout. [Official remote connection and chat-handoff documentation](https://developers.openai.com/codex/remote-connections). No remote access or chat transfer is configured by this documentation task.
 
-Sensor spoofing remains deferred at the user's request. This handoff makes no additional Life360 compatibility claims. All seven usability additions and gas-only Vacation scope are selected for future work; map-return, missing Follow and dot/route alignment reports are unresolved. Today's changes are documentation and its requested GitHub synchronization, not application implementation.
+Sensor spoofing remains deferred at the user's request. This handoff makes no additional Life360 compatibility claims. All seven usability additions and gas-only Vacation scope are selected for future work; map-return, missing Follow, dot/route alignment and desktop map-click route disappearance reports are unresolved. Today's changes are documentation and its requested GitHub synchronization, not application implementation.
