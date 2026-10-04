@@ -1,0 +1,8 @@
+{
+  "source": "https://ourairports.com/data/airports.csv",
+  "license": "Public domain",
+  "builtOn": "2026-10-02",
+  "scheduledServiceAirports": 3269,
+  "sourceSha256": "ff5143921ef72d767402c299a5d868f79166c5c589267aca13dce957c41bd2a2",
+  "note": "Global scheduled-service reference. Airport point may not be a reachable road access point; routes must validate access."
+}

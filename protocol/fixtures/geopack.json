@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "id": "synthetic-grid",
+  "name": "Synthetic grid \u2014 testing only",
+  "bounds": {
+    "south": 0,
+    "west": 0,
+    "north": 0.002,
+    "east": 0.002
+  },
+  "nodes": [
+    {
+      "id": "a",
+      "lat": 0,
+      "lon": 0
+    },
+    {
+      "id": "b",
+      "lat": 0,
+      "lon": 0.001
+    },
+    {
+      "id": "c",
+      "lat": 0.001,
+      "lon": 0.001
+    },
+    {
+      "id": "d",
+      "lat": 0.001,
+      "lon": 0
+    },
+    {
+      "id": "e",
+      "lat": 0.002,
+      "lon": 0.001
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b",
+      "modes": [
+        "WALK",
+        "DRIVE"
+      ],
+      "speedLimitMps": 13.9,
+      "bidirectional": true,
+      "speedLimitSource": "ESTIMATED"
+    },
+    {
+      "from": "b",
+      "to": "c",
+      "modes": [
+        "WALK",
+        "DRIVE"
+      ],
+      "speedLimitMps": 13.9,
+      "bidirectional": true,
+      "speedLimitSource": "ESTIMATED"
+    },
+    {
+      "from": "c",
+      "to": "d",
+      "modes": [
+        "WALK",
+        "DRIVE"
+      ],
+      "speedLimitMps": 13.9,
+      "bidirectional": true,
+      "speedLimitSource": "ESTIMATED"
+    },
+    {
+      "from": "d",
+      "to": "a",
+      "modes": [
+        "WALK",
+        "DRIVE"
+      ],
+      "speedLimitMps": 13.9,
+      "bidirectional": true,
+      "speedLimitSource": "ESTIMATED"
+    },
+    {
+      "from": "c",
+      "to": "e",
+      "modes": [
+        "WALK",
+        "DRIVE"
+      ],
+      "speedLimitMps": 13.9,
+      "bidirectional": true,
+      "speedLimitSource": "ESTIMATED"
+    }
+  ],
+  "places": [
+    {
+      "id": "start",
+      "name": "Synthetic Start",
+      "lat": 0,
+      "lon": 0
+    },
+    {
+      "id": "end",
+      "name": "Synthetic End",
+      "lat": 0.002,
+      "lon": 0.001
+    }
+  ],
+  "polygons": [],
+  "source": "Synthetic fixture, not real roads or geographic coverage",
+  "attribution": "LocalSpoof synthetic test data"
+}

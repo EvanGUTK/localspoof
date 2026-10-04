@@ -1,0 +1,14 @@
+import {mkdir,readFile,writeFile,copyFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import {createHash} from 'node:crypto';
+const destination=resolve('desktop/ui/vendor');await mkdir(destination,{recursive:true});
+const modules=[['maplibre-gl','dist/maplibre-gl.mjs'],['maplibre-gl','dist/maplibre-gl-shared.mjs'],['maplibre-gl','dist/maplibre-gl-worker.mjs'],['fflate','esm/browser.js','fflate.mjs'],['pmtiles','dist/esm/index.js','pmtiles.mjs'],['@protomaps/basemaps','dist/esm/index.js','basemaps.mjs']];
+const files=[];
+for(const [pkg,file,name] of modules){const input=resolve('node_modules',pkg,file),output=resolve(destination,name??file.split('/').at(-1));const original=await readFile(input,'utf8');let content=original.replace(/from(["'])fflate\1/g,'from"./fflate.mjs"').replace(/\/\/# sourceMappingURL=.*$/gm,'').replace(/\bconsole\.(?:log|info|debug|warn|error|timeEnd|time)\b/g,'silentDiagnostic');if(pkg==='pmtiles'){const indexStart='e=x(t),r=[]';if(!content.includes(indexStart))throw new Error('PMTiles directory decoder changed; review its bounds.');content=content.replace(indexStart,"e=x(t);if(e>16384||e>t.buf.length)throw new Error('Archive directory exceeds limits');let r=[]");}if(content!==original)content='const silentDiagnostic=(..._args)=>undefined;\n'+content;await writeFile(output,content);files.push({package:pkg,file:output.split('/').at(-1),upstreamSha256:createHash('sha256').update(original).digest('hex'),sha256:createHash('sha256').update(content).digest('hex'),adaptation:'PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors.'});}
+await copyFile('node_modules/maplibre-gl/dist/maplibre-gl.css',resolve(destination,'maplibre-gl.css'));
+await copyFile('node_modules/maplibre-gl/LICENSE.txt',resolve(destination,'MAPLIBRE-LICENSE.txt'));
+const licenses=[];for(const pkg of ['pmtiles','@protomaps/basemaps','fflate']){const metadata=JSON.parse(await readFile(resolve('node_modules',pkg,'package.json'),'utf8'));licenses.push({package:pkg,version:metadata.version,license:metadata.license});}
+await writeFile(resolve(destination,'licenses.json'),JSON.stringify(licenses,null,2));
+await writeFile(resolve(destination,'manifest.json'),JSON.stringify({files},null,2));
+await writeFile(resolve(destination,'bootstrap.mjs'),`import * as maplibregl from './maplibre-gl.mjs';\nimport * as pmtiles from './pmtiles.mjs';\nimport * as protomaps from './basemaps.mjs';\nwindow.maplibregl=maplibregl;window.pmtiles=pmtiles;window.protomaps=protomaps;\nmaplibregl.setWorkerUrl(new URL('./maplibre-gl-worker.mjs',import.meta.url).href);\nmaplibregl.setWorkerCount(2);\nawait import('../src/app.js');\n`);
+process.stdout.write('Bundled pinned map SDK modules and integrity/license records.\n');

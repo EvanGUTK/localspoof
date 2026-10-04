@@ -1,0 +1,1334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localspoof.invalid/protocol/v1",
+  "title": "LocalSpoof phone controller protocol v1.5",
+  "type": "object",
+  "required": [
+    "protocolMajor",
+    "protocolMinor",
+    "type",
+    "commandId",
+    "sequence",
+    "expectedRevision",
+    "payload"
+  ],
+  "properties": {
+    "protocolMajor": {
+      "const": 1
+    },
+    "protocolMinor": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 65535
+    },
+    "sessionId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "token": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "commandId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "enum": [
+        "Hello",
+        "Capabilities",
+        "PairRequest",
+        "PollPair",
+        "PreparePlan",
+        "CommitPlan",
+        "Start",
+        "Pause",
+        "Resume",
+        "Stop",
+        "Snapshot",
+        "Heartbeat",
+        "Airports",
+        "Places",
+        "ImportGeoPack",
+        "BeginGeoPack",
+        "GeoPackChunk",
+        "CommitGeoPack",
+        "RadioPhaseResult",
+        "SetSpeeds",
+        "JumpToNextStop"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "PairRequest"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/pairRequest"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "PollPair"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/pollPair"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "PreparePlan"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/plan"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "SetSpeeds"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/speeds"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "JumpToNextStop"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "maxProperties": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "pairId": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 32,
+      "pattern": "^[a-f0-9]{32}$"
+    },
+    "comparisonCode": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 6,
+      "pattern": "^[0-9]{6}$"
+    },
+    "pairRequest": {
+      "type": "object",
+      "required": [
+        "clientNonce"
+      ],
+      "properties": {
+        "clientNonce": {
+          "$ref": "#/$defs/pairId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pollPair": {
+      "type": "object",
+      "required": [
+        "pairingId",
+        "clientNonce"
+      ],
+      "properties": {
+        "pairingId": {
+          "$ref": "#/$defs/pairId"
+        },
+        "clientNonce": {
+          "$ref": "#/$defs/pairId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "phoneLocation": {
+      "type": "object",
+      "required": [
+        "point",
+        "source",
+        "ageMs"
+      ],
+      "properties": {
+        "point": {
+          "$ref": "#/$defs/point"
+        },
+        "source": {
+          "enum": [
+            "DEVICE",
+            "SIMULATION"
+          ]
+        },
+        "accuracyMeters": {
+          "type": "number",
+          "maximum": 10000,
+          "exclusiveMinimum": 0
+        },
+        "ageMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "speedMps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 350
+        },
+        "bearingDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 360
+        },
+        "sampleSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "placementGeneration": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "onlineRoute": {
+      "type": "object",
+      "required": [
+        "profile",
+        "provider",
+        "points"
+      ],
+      "properties": {
+        "profile": {
+          "enum": [
+            "WALK",
+            "DRIVE"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 12000,
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "edgeSpeedLimits": {
+          "type": "array",
+          "maxItems": 11999,
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0.1,
+            "maximum": 100
+          },
+          "description": "Optional mapped posted limit for each geometry edge; length must equal points length minus one. Null means unknown. Profile or calculated routing speeds are forbidden."
+        }
+      },
+      "additionalProperties": false
+    },
+    "onlineDriveRoute": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/onlineRoute"
+        },
+        {
+          "properties": {
+            "profile": {
+              "const": "DRIVE"
+            }
+          }
+        }
+      ]
+    },
+    "onlineFlightRoutes": {
+      "type": "object",
+      "required": [
+        "departureAirportId",
+        "arrivalAirportId"
+      ],
+      "properties": {
+        "departureAirportId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "arrivalAirportId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "originGround": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/onlineDriveRoute"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "destinationGround": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/onlineDriveRoute"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "segment": {
+      "type": "object",
+      "required": [
+        "role",
+        "kind",
+        "points",
+        "durationMs",
+        "routeSource"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "DEPARTURE",
+            "AIR",
+            "ARRIVAL"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "DRIVE",
+            "INSTANT",
+            "FLIGHT"
+          ]
+        },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4097,
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "routeSource": {
+          "enum": [
+            "ONLINE_ROUTER",
+            "OFFLINE_GEOPACK",
+            "INSTANT_LOCATION",
+            "FLIGHT_JOURNEY"
+          ]
+        },
+        "routeProvider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "INSTANT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "durationMs": {
+                "const": 0
+              },
+              "routeSource": {
+                "const": "INSTANT_LOCATION"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "DRIVE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "routeSource": {
+                "enum": [
+                  "ONLINE_ROUTER",
+                  "OFFLINE_GEOPACK"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "FLIGHT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "AIR"
+              },
+              "routeSource": {
+                "const": "FLIGHT_JOURNEY"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "point": {
+      "type": "object",
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "properties": {
+        "lat": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "lon": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      },
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "required": [
+        "mode",
+        "origin",
+        "destination",
+        "speedMps",
+        "radioPolicy"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "INSTANT",
+            "WALK",
+            "DRIVE",
+            "FLIGHT"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/point"
+        },
+        "destination": {
+          "$ref": "#/$defs/point"
+        },
+        "speedMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "waypoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "maxItems": 10000
+        },
+        "customPath": {
+          "type": "boolean",
+          "default": false
+        },
+        "dwellSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "flightDurationSeconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "radioPolicy": {
+          "enum": [
+            "MANUAL",
+            "SIMULATION",
+            "USB"
+          ]
+        },
+        "routeSource": {
+          "enum": [
+            "ONLINE_ROUTER",
+            "OFFLINE_GEOPACK",
+            "CUSTOM_PATH",
+            "INSTANT_LOCATION",
+            "FLIGHT_JOURNEY"
+          ]
+        },
+        "onlineRoute": {
+          "$ref": "#/$defs/onlineRoute"
+        },
+        "onlineFlightRoutes": {
+          "$ref": "#/$defs/onlineFlightRoutes"
+        },
+        "departureGroundMode": {
+          "enum": [
+            "DRIVE",
+            "INSTANT"
+          ],
+          "default": "DRIVE"
+        },
+        "arrivalGroundMode": {
+          "enum": [
+            "DRIVE",
+            "INSTANT"
+          ],
+          "default": "DRIVE"
+        },
+        "flightTransitMode": {
+          "enum": [
+            "TIMED",
+            "JUMP"
+          ],
+          "default": "TIMED"
+        },
+        "departureAirportId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "arrivalAirportId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "stops": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/routeStop"
+          }
+        },
+        "stopPointIndices": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 11998
+          }
+        },
+        "flightSpeedMps": {
+          "type": "number",
+          "minimum": 30,
+          "maximum": 350
+        },
+        "drivingSpeedMode": {
+          "enum": [
+            "FIXED",
+            "VARIABLE"
+          ]
+        },
+        "driveMinMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "driveMaxMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "followRoadLimits": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "FLIGHT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "routeSource": {
+                "const": "FLIGHT_JOURNEY"
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "departureGroundMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "arrivalGroundMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "flightTransitMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "onlineFlightRoutes"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "onlineFlightRoutes",
+              "departureGroundMode"
+            ],
+            "properties": {
+              "departureGroundMode": {
+                "const": "INSTANT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "onlineFlightRoutes": {
+                "properties": {
+                  "originGround": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "onlineFlightRoutes": {
+                "required": [
+                  "originGround"
+                ],
+                "properties": {
+                  "originGround": {
+                    "$ref": "#/$defs/onlineDriveRoute"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "onlineFlightRoutes",
+              "arrivalGroundMode"
+            ],
+            "properties": {
+              "arrivalGroundMode": {
+                "const": "INSTANT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "onlineFlightRoutes": {
+                "properties": {
+                  "destinationGround": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "onlineFlightRoutes": {
+                "required": [
+                  "destinationGround"
+                ],
+                "properties": {
+                  "destinationGround": {
+                    "$ref": "#/$defs/onlineDriveRoute"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "INSTANT",
+                  "FLIGHT"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "stops": {
+                "maxItems": 0
+              },
+              "stopPointIndices": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "INSTANT",
+                  "WALK",
+                  "DRIVE"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "flightSpeedMps"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "preview": {
+      "type": "object",
+      "required": [
+        "geometry",
+        "distanceMeters",
+        "durationMs"
+      ],
+      "properties": {
+        "geometry": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "maxItems": 4097
+        },
+        "geometrySimplified": {
+          "type": "boolean"
+        },
+        "distanceMeters": {
+          "type": "number",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "customPath": {
+          "type": "boolean"
+        },
+        "simulationOnly": {
+          "type": "boolean"
+        },
+        "routeSource": {
+          "enum": [
+            "ONLINE_ROUTER",
+            "OFFLINE_GEOPACK",
+            "CUSTOM_PATH",
+            "INSTANT_LOCATION",
+            "FLIGHT_JOURNEY"
+          ]
+        },
+        "segments": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/segment"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "DEPARTURE"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/segment"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "AIR"
+                    },
+                    "kind": {
+                      "const": "FLIGHT"
+                    },
+                    "routeSource": {
+                      "const": "FLIGHT_JOURNEY"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/segment"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "ARRIVAL"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "departureGroundMode": {
+          "enum": [
+            "DRIVE",
+            "INSTANT"
+          ]
+        },
+        "arrivalGroundMode": {
+          "enum": [
+            "DRIVE",
+            "INSTANT"
+          ]
+        },
+        "flightTransitMode": {
+          "enum": [
+            "TIMED",
+            "JUMP"
+          ]
+        },
+        "originAirport": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "destinationAirport": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "originAirportAccessPoint": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "destinationAirportAccessPoint": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stops": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/routeStop"
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "ok",
+        "payload"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "enum": [
+            "IDLE",
+            "READY",
+            "ACTIVE",
+            "PAUSED",
+            "HOLDING",
+            "ERROR"
+          ]
+        },
+        "point": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "geopack": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "bounds",
+        "nodes",
+        "edges",
+        "places",
+        "polygons",
+        "source",
+        "attribution"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "attribution": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "bounds": {
+          "type": "object",
+          "required": [
+            "south",
+            "west",
+            "north",
+            "east"
+          ],
+          "properties": {
+            "south": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "north": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "west": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            },
+            "east": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 50000
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 150000,
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "modes"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "modes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "WALK",
+                    "DRIVE"
+                  ]
+                }
+              },
+              "speedLimitMps": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0,
+                "maximum": 100
+              },
+              "bidirectional": {
+                "type": "boolean"
+              },
+              "speedLimitSource": {
+                "enum": [
+                  "MAPPED",
+                  "ESTIMATED",
+                  "UNKNOWN"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "places": {
+          "type": "array",
+          "maxItems": 50000
+        },
+        "polygons": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 20000,
+            "items": {
+              "$ref": "#/$defs/point"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "speeds": {
+      "type": "object",
+      "properties": {
+        "walkMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 3
+        },
+        "driveMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "flightMps": {
+          "type": "number",
+          "minimum": 30,
+          "maximum": 350
+        },
+        "drivingSpeedMode": {
+          "enum": [
+            "FIXED",
+            "VARIABLE"
+          ]
+        },
+        "driveMinMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "driveMaxMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "followRoadLimits": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "routeStop": {
+      "type": "object",
+      "properties": {
+        "point": {
+          "$ref": "#/$defs/point"
+        },
+        "dwellSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      },
+      "required": [
+        "point"
+      ],
+      "additionalProperties": false
+    },
+    "speedControls": {
+      "type": "object",
+      "required": [
+        "mode",
+        "driveMinMps",
+        "driveMaxMps",
+        "followRoadLimits"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "FIXED",
+            "VARIABLE"
+          ]
+        },
+        "driveMinMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "driveMaxMps": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 56
+        },
+        "followRoadLimits": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "motion": {
+      "type": "object",
+      "required": [
+        "speedMps",
+        "sampleAgeMs",
+        "sampleSequence",
+        "roadLimitMps",
+        "roadLimitSource",
+        "health",
+        "placementGeneration"
+      ],
+      "properties": {
+        "speedMps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 350
+        },
+        "sampleAgeMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "sampleSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "roadLimitMps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "roadLimitSource": {
+          "enum": [
+            "MAPPED",
+            "UNKNOWN"
+          ]
+        },
+        "health": {
+          "enum": [
+            "LIVE",
+            "STALE",
+            "PAUSED",
+            "WAITING",
+            "IDLE",
+            "ERROR"
+          ]
+        },
+        "placementGeneration": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

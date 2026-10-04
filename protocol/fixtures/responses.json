@@ -1,0 +1,471 @@
+{
+  "protocolMajor": 1,
+  "protocolMinor": 5,
+  "comparisonVectors": [
+    {
+      "clientNonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "pairingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "comparisonCode": "508163"
+    },
+    {
+      "clientNonce": "00000000000000000000000000000000",
+      "pairingId": "11111111111111111111111111111111",
+      "comparisonCode": "326622"
+    },
+    {
+      "clientNonce": "00000000000000000000000000000000",
+      "pairingId": "ffffffffffffffffffffffffffffffff",
+      "comparisonCode": "077916"
+    },
+    {
+      "clientNonce": "00000000000000000000000000000000",
+      "pairingId": "00000000000000000000000000000004",
+      "comparisonCode": "044717"
+    }
+  ],
+  "rendererExamples": {
+    "pairRequested": {
+      "ok": true,
+      "payload": {
+        "pairingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "comparisonCode": "508163",
+        "pending": true
+      }
+    },
+    "pairPending": {
+      "ok": false,
+      "error": "PAIRING_PENDING"
+    },
+    "pairRejected": {
+      "ok": false,
+      "error": "PAIRING_REJECTED"
+    },
+    "pairApproved": {
+      "ok": true,
+      "payload": {
+        "paired": true,
+        "usbAirplaneAvailable": false
+      }
+    }
+  },
+  "examples": {
+    "hello": {
+      "ok": true,
+      "payload": {
+        "protocolMajor": 1,
+        "protocolMinor": 5,
+        "approvalPairing": true,
+        "livePhoneLocation": true,
+        "flightLegOptions": true,
+        "frameworkMock": true,
+        "fusedMock": false,
+        "guidedAirplane": true,
+        "usbAirplane": false,
+        "maxFrameBytes": 1048576,
+        "maxPackBytes": 16777216,
+        "pairingRequired": true,
+        "liveJourneyControls": true,
+        "routeStops": true,
+        "motionTelemetry": true,
+        "variableCruise": true,
+        "mappedRoadLimits": true
+      }
+    },
+    "pairRequested": {
+      "ok": true,
+      "payload": {
+        "pairingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "comparisonCode": "508163",
+        "pending": true
+      }
+    },
+    "pairPending": {
+      "ok": false,
+      "error": "PAIRING_PENDING",
+      "payload": {
+        "pending": true,
+        "paired": false,
+        "token": null
+      }
+    },
+    "pairApproved": {
+      "ok": true,
+      "payload": {
+        "pending": false,
+        "paired": true,
+        "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "prepared": {
+      "ok": true,
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 0,
+      "state": "IDLE",
+      "point": null,
+      "phase": null,
+      "payload": {
+        "preparedId": "synthetic-prepared-plan",
+        "preview": {
+          "mode": "WALK",
+          "origin": {
+            "lat": 1,
+            "lon": 1
+          },
+          "destination": {
+            "lat": 1,
+            "lon": 1.001
+          },
+          "distanceMeters": 111.178,
+          "durationMs": 79413,
+          "customPath": true,
+          "originAirport": null,
+          "destinationAirport": null,
+          "originAirportAccessPoint": null,
+          "destinationAirportAccessPoint": null,
+          "geometry": [
+            {
+              "lat": 1,
+              "lon": 1
+            },
+            {
+              "lat": 1,
+              "lon": 1.001
+            }
+          ],
+          "geometrySimplified": false,
+          "simulationOnly": true
+        }
+      }
+    },
+    "snapshotReady": {
+      "ok": true,
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 1,
+      "state": "READY",
+      "point": {
+        "lat": 1,
+        "lon": 1
+      },
+      "phase": null,
+      "payload": {
+        "phoneLocation": {
+          "point": {
+            "lat": 1,
+            "lon": 1
+          },
+          "source": "DEVICE",
+          "accuracyMeters": 12,
+          "ageMs": 500,
+          "sampleSequence": 0,
+          "placementGeneration": 0
+        },
+        "mode": "WALK",
+        "providerHealth": "NOT_PREPARED",
+        "phoneStartRequired": true,
+        "radioObserved": false,
+        "preparedPreview": null,
+        "message": "Plan ready. Start on this phone.",
+        "elapsedMs": 0,
+        "remainingMs": 79413,
+        "radioRequest": null,
+        "speeds": {
+          "walkMps": 1.4,
+          "driveMps": 13.9,
+          "flightMps": 230
+        },
+        "remainingMeters": 1000,
+        "nextStop": {
+          "point": {
+            "lat": 1,
+            "lon": 1.001
+          },
+          "label": "Destination",
+          "index": 0
+        },
+        "waitingFor": null,
+        "speedControls": {
+          "mode": "FIXED",
+          "driveMinMps": 13.9,
+          "driveMaxMps": 13.9,
+          "followRoadLimits": true
+        },
+        "motion": {
+          "speedMps": null,
+          "sampleAgeMs": null,
+          "sampleSequence": 0,
+          "roadLimitMps": null,
+          "roadLimitSource": "UNKNOWN",
+          "health": "IDLE",
+          "placementGeneration": 0
+        },
+        "desiredAirplaneMode": null
+      }
+    },
+    "snapshotFlightAwait": {
+      "ok": true,
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 2,
+      "state": "ACTIVE",
+      "point": {
+        "lat": 1,
+        "lon": 1
+      },
+      "phase": "AWAIT_AIRPLANE_MODE",
+      "payload": {
+        "phoneLocation": {
+          "point": {
+            "lat": 1,
+            "lon": 1
+          },
+          "source": "SIMULATION",
+          "accuracyMeters": 5,
+          "ageMs": 250,
+          "sampleSequence": 12,
+          "speedMps": 0,
+          "bearingDegrees": 90,
+          "placementGeneration": 1
+        },
+        "mode": "FLIGHT",
+        "providerHealth": "SAMPLE_SUBMITTED",
+        "phoneStartRequired": false,
+        "radioObserved": false,
+        "preparedPreview": null,
+        "message": null,
+        "elapsedMs": 30000,
+        "remainingMs": null,
+        "radioRequest": {
+          "phaseId": "flight-1-AWAIT_AIRPLANE_MODE",
+          "enabled": true
+        },
+        "speeds": {
+          "walkMps": 1.4,
+          "driveMps": 13.9,
+          "flightMps": 230
+        },
+        "remainingMeters": 1000,
+        "nextStop": {
+          "point": {
+            "lat": 1,
+            "lon": 1.001
+          },
+          "label": "Destination",
+          "index": 0
+        },
+        "waitingFor": "AIRPLANE_MODE",
+        "speedControls": {
+          "mode": "FIXED",
+          "driveMinMps": 13.9,
+          "driveMaxMps": 13.9,
+          "followRoadLimits": true
+        },
+        "motion": {
+          "speedMps": 0,
+          "sampleAgeMs": 250,
+          "sampleSequence": 12,
+          "roadLimitMps": null,
+          "roadLimitSource": "UNKNOWN",
+          "health": "WAITING",
+          "placementGeneration": 1
+        },
+        "desiredAirplaneMode": true
+      }
+    },
+    "preparedFlight": {
+      "ok": true,
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 3,
+      "state": "IDLE",
+      "point": null,
+      "phase": null,
+      "payload": {
+        "preparedId": "synthetic-prepared-flight",
+        "preview": {
+          "mode": "FLIGHT",
+          "origin": {
+            "lat": 1,
+            "lon": 1
+          },
+          "destination": {
+            "lat": 2,
+            "lon": 3
+          },
+          "distanceMeters": 400000,
+          "durationMs": 3600000,
+          "routeSource": "FLIGHT_JOURNEY",
+          "departureGroundMode": "INSTANT",
+          "arrivalGroundMode": "INSTANT",
+          "flightTransitMode": "TIMED",
+          "geometry": [
+            {
+              "lat": 1,
+              "lon": 1
+            },
+            {
+              "lat": 1,
+              "lon": 2
+            },
+            {
+              "lat": 2,
+              "lon": 2
+            },
+            {
+              "lat": 2,
+              "lon": 3
+            }
+          ],
+          "geometrySimplified": false,
+          "segments": [
+            {
+              "role": "DEPARTURE",
+              "kind": "INSTANT",
+              "points": [
+                {
+                  "lat": 1,
+                  "lon": 1
+                },
+                {
+                  "lat": 1,
+                  "lon": 2
+                }
+              ],
+              "durationMs": 0,
+              "routeSource": "INSTANT_LOCATION"
+            },
+            {
+              "role": "AIR",
+              "kind": "FLIGHT",
+              "points": [
+                {
+                  "lat": 1,
+                  "lon": 2
+                },
+                {
+                  "lat": 2,
+                  "lon": 2
+                }
+              ],
+              "durationMs": 3600000,
+              "routeSource": "FLIGHT_JOURNEY"
+            },
+            {
+              "role": "ARRIVAL",
+              "kind": "INSTANT",
+              "points": [
+                {
+                  "lat": 2,
+                  "lon": 2
+                },
+                {
+                  "lat": 2,
+                  "lon": 3
+                }
+              ],
+              "durationMs": 0,
+              "routeSource": "INSTANT_LOCATION"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "requestExamples": {
+    "drive": {
+      "mode": "DRIVE",
+      "origin": {
+        "lat": 1,
+        "lon": 1
+      },
+      "destination": {
+        "lat": 1,
+        "lon": 1.001
+      },
+      "speedMps": 13.9,
+      "radioPolicy": "MANUAL",
+      "routeSource": "CUSTOM_PATH",
+      "customPath": true
+    },
+    "flightInstantJump": {
+      "mode": "FLIGHT",
+      "origin": {
+        "lat": 1,
+        "lon": 1
+      },
+      "destination": {
+        "lat": 2,
+        "lon": 3
+      },
+      "speedMps": 13.9,
+      "radioPolicy": "MANUAL",
+      "routeSource": "FLIGHT_JOURNEY",
+      "departureGroundMode": "INSTANT",
+      "arrivalGroundMode": "INSTANT",
+      "flightTransitMode": "JUMP",
+      "dwellSeconds": 30,
+      "flightDurationSeconds": 3600,
+      "departureAirportId": "synthetic-departure",
+      "arrivalAirportId": "synthetic-arrival",
+      "onlineFlightRoutes": {
+        "departureAirportId": "synthetic-departure",
+        "arrivalAirportId": "synthetic-arrival"
+      }
+    },
+    "driveWithStops": {
+      "mode": "DRIVE",
+      "origin": {
+        "lat": 1,
+        "lon": 1
+      },
+      "destination": {
+        "lat": 1,
+        "lon": 1.002
+      },
+      "speedMps": 13.9,
+      "radioPolicy": "MANUAL",
+      "routeSource": "ONLINE_ROUTER",
+      "onlineRoute": {
+        "profile": "DRIVE",
+        "provider": "Synthetic fixture",
+        "points": [
+          {
+            "lat": 1,
+            "lon": 1
+          },
+          {
+            "lat": 1,
+            "lon": 1.001
+          },
+          {
+            "lat": 1,
+            "lon": 1.002
+          }
+        ]
+      },
+      "stops": [
+        {
+          "point": {
+            "lat": 1,
+            "lon": 1.001
+          },
+          "label": "Coffee",
+          "dwellSeconds": 20
+        }
+      ],
+      "stopPointIndices": [
+        1
+      ]
+    },
+    "setSpeeds": {
+      "walkMps": 1.4,
+      "driveMps": 20,
+      "flightMps": 250
+    },
+    "jumpToNextStop": {},
+    "setDrivingControls": {
+      "drivingSpeedMode": "VARIABLE",
+      "driveMinMps": 40.2336,
+      "driveMaxMps": 55.88,
+      "followRoadLimits": true
+    }
+  }
+}

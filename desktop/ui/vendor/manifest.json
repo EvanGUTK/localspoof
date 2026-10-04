@@ -1,0 +1,46 @@
+{
+  "files": [
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl.mjs",
+      "upstreamSha256": "3f55566295583644617fe17d008a36c580414b8c71dd2e1fcff1309de6fdee5d",
+      "sha256": "e7ed8859cc20d2b04c08caacabb3690bdef9d6210eb4c7433715e13c6a068b14",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl-shared.mjs",
+      "upstreamSha256": "76b5f55bdee928c65d592684aaff2b913d50b6b17b0ec6334e88b09b6aa47960",
+      "sha256": "be582a294e562fa2856105ea0af87ff6c656265c615634c34da1a4505f60fc64",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl-worker.mjs",
+      "upstreamSha256": "01ad197aa7f4cec258a890febd71b7515e96309881b036a7095befc01a45296e",
+      "sha256": "45b33713de16f0bb2012b55ad8fa2695a42e3f3f839e12ed684dd7ae6cb9e7a9",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "fflate",
+      "file": "fflate.mjs",
+      "upstreamSha256": "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1",
+      "sha256": "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "pmtiles",
+      "file": "pmtiles.mjs",
+      "upstreamSha256": "751d3f5250d565db7f9ee6bf5ba58ba471cac586cce88f0e3a3834da407f402b",
+      "sha256": "07555e38726d04c9eb301d6560d6e33d693ccf86aa496c97f4692a650d332781",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "@protomaps/basemaps",
+      "file": "basemaps.mjs",
+      "upstreamSha256": "9d6ee63bee82fd4af79bedaaab538f904341b35fbc1f6254b86166aa4ee24cf1",
+      "sha256": "d18d07afbf4ba19df3d48cd679ed5841c12d4780d4ad4ae5534d48963c0778f3",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    }
+  ]
+}

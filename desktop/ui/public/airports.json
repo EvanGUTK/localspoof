@@ -1,0 +1,488 @@
+[
+  {
+    "id": "ORD",
+    "name": "Chicago O'Hare",
+    "lat": 41.9786,
+    "lon": -87.9048,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MDW",
+    "name": "Chicago Midway",
+    "lat": 41.7868,
+    "lon": -87.7522,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "JFK",
+    "name": "New York John F. Kennedy",
+    "lat": 40.6398,
+    "lon": -73.7789,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "LGA",
+    "name": "New York LaGuardia",
+    "lat": 40.7772,
+    "lon": -73.8726,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "EWR",
+    "name": "Newark Liberty",
+    "lat": 40.6925,
+    "lon": -74.1687,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "LAX",
+    "name": "Los Angeles",
+    "lat": 33.9425,
+    "lon": -118.4081,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SFO",
+    "name": "San Francisco",
+    "lat": 37.619,
+    "lon": -122.375,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "ATL",
+    "name": "Atlanta Hartsfield-Jackson",
+    "lat": 33.6367,
+    "lon": -84.4281,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DFW",
+    "name": "Dallas Fort Worth",
+    "lat": 32.8968,
+    "lon": -97.038,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DEN",
+    "name": "Denver",
+    "lat": 39.8617,
+    "lon": -104.673,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SEA",
+    "name": "Seattle Tacoma",
+    "lat": 47.449,
+    "lon": -122.309,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MIA",
+    "name": "Miami",
+    "lat": 25.7933,
+    "lon": -80.2906,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "BOS",
+    "name": "Boston Logan",
+    "lat": 42.3643,
+    "lon": -71.0052,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "PHX",
+    "name": "Phoenix Sky Harbor",
+    "lat": 33.4343,
+    "lon": -112.012,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "IAH",
+    "name": "Houston George Bush",
+    "lat": 29.9844,
+    "lon": -95.3414,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DCA",
+    "name": "Washington Reagan",
+    "lat": 38.8521,
+    "lon": -77.0377,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "IAD",
+    "name": "Washington Dulles",
+    "lat": 38.9445,
+    "lon": -77.4558,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "AUS",
+    "name": "Austin Bergstrom",
+    "lat": 30.1945,
+    "lon": -97.6699,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MSP",
+    "name": "Minneapolis Saint Paul",
+    "lat": 44.882,
+    "lon": -93.2218,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "BNA",
+    "name": "Nashville",
+    "lat": 36.1245,
+    "lon": -86.6782,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "LAS",
+    "name": "Las Vegas",
+    "lat": 36.0801,
+    "lon": -115.152,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SLC",
+    "name": "Salt Lake City",
+    "lat": 40.7884,
+    "lon": -111.978,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MEX",
+    "name": "Mexico City",
+    "lat": 19.4363,
+    "lon": -99.0721,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "YYZ",
+    "name": "Toronto Pearson",
+    "lat": 43.6772,
+    "lon": -79.6306,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "YVR",
+    "name": "Vancouver",
+    "lat": 49.1947,
+    "lon": -123.184,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "LHR",
+    "name": "London Heathrow",
+    "lat": 51.4706,
+    "lon": -0.461941,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "CDG",
+    "name": "Paris Charles de Gaulle",
+    "lat": 49.0097,
+    "lon": 2.5479,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "AMS",
+    "name": "Amsterdam Schiphol",
+    "lat": 52.3086,
+    "lon": 4.7639,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "FRA",
+    "name": "Frankfurt",
+    "lat": 50.0333,
+    "lon": 8.5706,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MAD",
+    "name": "Madrid Barajas",
+    "lat": 40.4719,
+    "lon": -3.5626,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "FCO",
+    "name": "Rome Fiumicino",
+    "lat": 41.8003,
+    "lon": 12.2389,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "ZRH",
+    "name": "Zurich",
+    "lat": 47.4647,
+    "lon": 8.5492,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "IST",
+    "name": "Istanbul",
+    "lat": 41.2753,
+    "lon": 28.7519,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DXB",
+    "name": "Dubai",
+    "lat": 25.2528,
+    "lon": 55.3644,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DOH",
+    "name": "Doha Hamad",
+    "lat": 25.2731,
+    "lon": 51.6081,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "DEL",
+    "name": "Delhi Indira Gandhi",
+    "lat": 28.5665,
+    "lon": 77.1031,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "BOM",
+    "name": "Mumbai",
+    "lat": 19.0887,
+    "lon": 72.8679,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SIN",
+    "name": "Singapore Changi",
+    "lat": 1.35019,
+    "lon": 103.994,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "HKG",
+    "name": "Hong Kong",
+    "lat": 22.3089,
+    "lon": 113.915,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "HND",
+    "name": "Tokyo Haneda",
+    "lat": 35.5523,
+    "lon": 139.78,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "NRT",
+    "name": "Tokyo Narita",
+    "lat": 35.7647,
+    "lon": 140.386,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "ICN",
+    "name": "Seoul Incheon",
+    "lat": 37.4691,
+    "lon": 126.451,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "PEK",
+    "name": "Beijing Capital",
+    "lat": 40.0801,
+    "lon": 116.585,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "PVG",
+    "name": "Shanghai Pudong",
+    "lat": 31.1434,
+    "lon": 121.805,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SYD",
+    "name": "Sydney",
+    "lat": -33.9461,
+    "lon": 151.177,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "MEL",
+    "name": "Melbourne",
+    "lat": -37.6733,
+    "lon": 144.843,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "AKL",
+    "name": "Auckland",
+    "lat": -37.0081,
+    "lon": 174.792,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "JNB",
+    "name": "Johannesburg",
+    "lat": -26.1392,
+    "lon": 28.246,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "CPT",
+    "name": "Cape Town",
+    "lat": -33.9648,
+    "lon": 18.6017,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "CAI",
+    "name": "Cairo",
+    "lat": 30.1219,
+    "lon": 31.4056,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "GRU",
+    "name": "São Paulo Guarulhos",
+    "lat": -23.4356,
+    "lon": -46.4731,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "EZE",
+    "name": "Buenos Aires Ezeiza",
+    "lat": -34.8222,
+    "lon": -58.5358,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "SCL",
+    "name": "Santiago",
+    "lat": -33.393,
+    "lon": -70.7858,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  },
+  {
+    "id": "BOG",
+    "name": "Bogotá El Dorado",
+    "lat": 4.70159,
+    "lon": -74.1469,
+    "type": "large_airport",
+    "scheduledService": true,
+    "closed": false
+  }
+]

@@ -1,0 +1,57 @@
+{
+  "files": [
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl-shared.mjs",
+      "upstreamSha256": "76b5f55bdee928c65d592684aaff2b913d50b6b17b0ec6334e88b09b6aa47960",
+      "sha256": "be582a294e562fa2856105ea0af87ff6c656265c615634c34da1a4505f60fc64",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl-worker.mjs",
+      "upstreamSha256": "01ad197aa7f4cec258a890febd71b7515e96309881b036a7095befc01a45296e",
+      "sha256": "45b33713de16f0bb2012b55ad8fa2695a42e3f3f839e12ed684dd7ae6cb9e7a9",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    },
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl.css",
+      "sha256": "d8617d8421930e3fc6185365400e788c374c1a5d9fbe87999998c0bc14a202d3"
+    },
+    {
+      "package": "maplibre-gl",
+      "file": "maplibre-gl.mjs",
+      "upstreamSha256": "3f55566295583644617fe17d008a36c580414b8c71dd2e1fcff1309de6fdee5d",
+      "sha256": "e7ed8859cc20d2b04c08caacabb3690bdef9d6210eb4c7433715e13c6a068b14",
+      "adaptation": "PMTiles directory entries capped at 16384; SDK diagnostic calls disabled; source-map URL removed. Application event listeners expose generic errors."
+    }
+  ],
+  "style": {
+    "file": "../world-style.json",
+    "sha256": "554b6f979da8be671cfd692c403328c628a1031f150e37ca8c7d03cdf0513051",
+    "adaptation": "Packaged OpenFreeMap style adapted to dark colors; source URLs unchanged; native fixed-provider interception enforces app-origin requests."
+  },
+  "applicationAssets": [
+    {
+      "file": "../index.html",
+      "sha256": "464ae121efe255b38f5487054034732228f5eaf60d52f5f492e05d582ac82819"
+    },
+    {
+      "file": "../bootstrap.js",
+      "sha256": "74c45cf68078cf55ee484f59152efee21fa019a2436e1d53c76b0395d9c20c40"
+    },
+    {
+      "file": "../map.mjs",
+      "sha256": "0b504c1cee9608eff7e6b4cb28de10dacdf7215177f6e020fa45fd864a269f11"
+    },
+    {
+      "file": "../map.css",
+      "sha256": "9cb104bfec33ba0f426142829b545f2c798b49b388d7a29d2bf83e066a29b888"
+    },
+    {
+      "file": "../motion.mjs",
+      "sha256": "f671230ad318347a15cd1804ebd0fbf87a79817966d420ae194d3ba3174f7947"
+    }
+  ]
+}

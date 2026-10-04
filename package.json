@@ -1,0 +1,24 @@
+{
+  "name": "localspoof-workspace",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ui": "node tools/build-ui.mjs",
+    "preview": "node tools/preview.mjs",
+    "test": "node --test --test-isolation=none desktop/ui/tests/*.test.mjs tools/tests/*.test.mjs",
+    "typecheck": "node tools/typecheck-ui.mjs",
+    "test:privacy": "node tools/privacy-check.mjs",
+    "test:protocol": "node tools/check-protocol-fixtures.mjs",
+    "verify": "npm test && npm run test:privacy && npm run test:protocol && npm run build:ui",
+    "test:native": "cargo test --manifest-path desktop/native/Cargo.toml --offline"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@protomaps/basemaps": "5.7.2",
+    "maplibre-gl": "6.11.2",
+    "pmtiles": "4.5.0"
+  }
+}
