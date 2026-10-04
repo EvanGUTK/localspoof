@@ -131,6 +131,19 @@ async fn nearby_places(
 }
 
 #[tauri::command]
+async fn vehicle_catalog(
+    resource: String,
+    year: Option<u16>,
+    make: Option<String>,
+    model: Option<String>,
+    id: Option<u32>,
+    state: State<'_, AppNetwork>,
+) -> Result<Value, String> {
+    let network = state.inner().clone();
+    blocking(move || network.vehicle_catalog(resource, year, make, model, id)).await
+}
+
+#[tauri::command]
 async fn map_resource(
     url: String,
     state: State<'_, AppNetwork>,
@@ -300,6 +313,7 @@ fn main() {
             online_route,
             search_places,
             nearby_places,
+            vehicle_catalog,
             clear_network_state,
             discover_local_tools,
             list_devices,

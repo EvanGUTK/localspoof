@@ -71,8 +71,8 @@ try {
     if ($NativeExit -ne 0) { throw 'Release certificate export failed.' }
     $SignerSha256 = (Get-FileHash -LiteralPath $Certificate -Algorithm SHA256).Hash.ToLowerInvariant()
     New-Item -ItemType Directory -Force $ReleaseDirectory | Out-Null
-    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.6.0-aligned.apk'
-    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.6.0.apk'
+    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.7.0-aligned.apk'
+    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.7.0.apk'
     $NativePreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

@@ -62,7 +62,7 @@ internal fun PlanPreview.json(): JsonObject = buildJsonObject {
     put("geometry", JsonArray(previewPoints.map { it.json() }))
     put("geometrySimplified", step > 1)
     put("simulationOnly", simulationOnly)
-    put("stops", JsonArray(stops.map { stop -> buildJsonObject { put("point", stop.point.json()); put("dwellSeconds", stop.dwellMs / 1000.0); put("label", stop.label) } }))
+    put("stops", JsonArray(stops.map { it.json() }))
     if (mode == Mode.FLIGHT) {
         put("departureGroundMode", departureGroundMode?.name ?: GroundLegMode.DRIVE.name)
         put("arrivalGroundMode", arrivalGroundMode?.name ?: GroundLegMode.DRIVE.name)
@@ -77,18 +77,28 @@ internal fun PlanPreview.json(): JsonObject = buildJsonObject {
     }
 }
 
-internal fun parseRequest(payload: JsonObject): PlanRequest {
+internal fun parseRequest(payload: JsonObject, remainingFlight: Boolean = false): PlanRequest {
     val mode = Mode.valueOf(payload.str("mode"))
     require(mode == Mode.FLIGHT || listOf("departureGroundMode", "arrivalGroundMode", "flightTransitMode", "flightSpeedMps").none { it in payload }) { "UNEXPECTED_FLIGHT_OPTIONS" }
     val origin = payload.obj("origin").point()
     val destination = payload.obj("destination").point()
     val stops = payload["stops"]?.jsonArray?.also { require(it.size <= 32) { "TOO_MANY_STOPS" } }?.map { element ->
         val stop = element.jsonObject
-        require(stop.keys.contains("point") && stop.keys.all { it in setOf("point", "dwellSeconds", "label") }) { "INVALID_STOP_FIELDS" }
+        require(stop.keys.contains("point") && stop.keys.all { it in setOf("point", "dwellSeconds", "label", "kind", "fuel", "hotel", "id") }) { "INVALID_STOP_FIELDS" }
         val point = stop.obj("point"); require(point.keys == setOf("lat", "lon")) { "INVALID_STOP_POINT" }
-        val dwell = stop.optionalNumber("dwellSeconds") ?: 0.0
-        require(dwell in 0.0..3600.0) { "INVALID_STOP_DWELL" }
-        RouteStop(point.point(), (dwell * 1000).toLong(), stop["label"]?.let { stop.str("label") } ?: "Stop")
+        val kind=stop["kind"]?.let { StopKind.valueOf(stop.str("kind")) } ?: StopKind.PLACE
+        val fuel=stop["fuel"]?.takeUnless { it is JsonNull }?.jsonObject?.let { f ->
+            require(f.keys.contains("refillTargetLiters") && f.keys.all { it in setOf("refillTargetLiters","pricePerLiter","currency") }) { "INVALID_FUEL_FIELDS" }
+            FuelStop(f.number("refillTargetLiters"),f.optionalNumber("pricePerLiter"),f["currency"]?.let { f.str("currency") })
+        }
+        val hotel=stop["hotel"]?.takeUnless { it is JsonNull }?.jsonObject?.let { h ->
+            require(h.keys.containsAll(setOf("checkInSeconds","staySeconds","checkOutSeconds","nights","currency")) && h.keys.all { it in setOf("checkInSeconds","staySeconds","checkOutSeconds","nights","nightlyPrice","fees","currency") }) { "INVALID_HOTEL_FIELDS" }
+            fun ms(key:String,maxSeconds:Double):Long { val seconds=h.number(key);require(seconds in 0.0..maxSeconds) { "INVALID_HOTEL_DURATION" };return (seconds*1000).toLong() }
+            HotelStop(ms("checkInSeconds",86400.0),ms("staySeconds",2592000.0),ms("checkOutSeconds",86400.0),h.long("nights").also { require(it in 0..365) }.toInt(),h.optionalNumber("nightlyPrice"),h.optionalNumber("fees"),h.str("currency"))
+        }
+        val dwell = stop.optionalNumber("dwellSeconds") ?: hotel?.durationMs?.div(1000.0) ?: 0.0
+        require(dwell in 0.0..2764800.0 && (kind==StopKind.HOTEL || dwell<=3600)) { "INVALID_STOP_DWELL" }
+        RouteStop(point.point(), (dwell * 1000).toLong(), stop["label"]?.let { stop.str("label") } ?: "Stop",kind,fuel,hotel,stop["id"]?.let { stop.str("id") } ?: java.util.UUID.randomUUID().toString())
     } ?: emptyList()
     val stopIndices = payload["stopPointIndices"]?.jsonArray?.also { require(it.size <= 32) }?.map {
         require(!it.jsonPrimitive.isString); val index = it.jsonPrimitive.int; require(index in 0 until MAX_ONLINE_ROUTE_POINTS); index
@@ -135,6 +145,7 @@ internal fun parseRequest(payload: JsonObject): PlanRequest {
         ) else null,
         onlineRoute = online, onlineFlightRoutes = onlineFlight,
         flightSpeedMps = payload.optionalNumber("flightSpeedMps"), stops = stops, stopPointIndices = stopIndices,
+        vacation=payload["vacation"]?.takeUnless { it is JsonNull }?.jsonObject?.let(::parseVacation), remainingFlight=remainingFlight,
         speedControls = DrivingSpeedControls(
             payload["drivingSpeedMode"]?.let { DrivingSpeedMode.valueOf(payload.str("drivingSpeedMode")) } ?: DrivingSpeedMode.FIXED,
             payload.optionalNumber("driveMinMps") ?: payload.optionalNumber("speedMps") ?: 13.9,
@@ -210,4 +221,27 @@ internal fun parseGeoPack(bytes: ByteArray): GeoPack {
         source = manifest["source"]?.jsonPrimitive?.content ?: "User-provided offline resource",
         attribution = manifest["attribution"]?.jsonPrimitive?.content ?: ""
     )
+}
+
+internal fun parseVacation(v:JsonObject):VacationConfig {
+    require(v.keys.containsAll(setOf("tankLiters","startingFuelLiters","reserveLiters","litersPer100Km","fuelGrade","currency")) && v.keys.all { it in setOf("tankLiters","startingFuelLiters","reserveLiters","litersPer100Km","fuelGrade","currency","fuelPricePerLiter") }) { "INVALID_VACATION_FIELDS" }
+    return VacationConfig(v.number("tankLiters"),v.number("startingFuelLiters"),v.number("reserveLiters"),v.number("litersPer100Km"),FuelGrade.valueOf(v.str("fuelGrade")),v.str("currency"),v.optionalNumber("fuelPricePerLiter"))
+}
+internal fun RouteStop.json():JsonObject = buildJsonObject {
+    put("point",point.json());put("dwellSeconds",dwellMs/1000.0);put("label",label);put("kind",kind.name);put("id",id)
+    fuel?.let { f -> put("fuel",buildJsonObject { put("refillTargetLiters",f.refillTargetLiters);f.pricePerLiter?.let{put("pricePerLiter",it)};f.currency?.let{put("currency",it)} }) }
+    hotel?.let { h -> put("hotel",buildJsonObject { put("checkInSeconds",h.checkInMs/1000.0);put("staySeconds",h.stayMs/1000.0);put("checkOutSeconds",h.checkOutMs/1000.0);put("nights",h.nights);put("currency",h.currency);h.nightlyPrice?.let{put("nightlyPrice",it)};h.fees?.let{put("fees",it)} }) }
+}
+internal fun VacationConfig.json():JsonObject=buildJsonObject {
+    put("tankLiters",tankLiters);put("startingFuelLiters",startingFuelLiters);put("reserveLiters",reserveLiters);put("litersPer100Km",litersPer100Km);put("fuelGrade",fuelGrade.name);put("currency",currency);fuelPricePerLiter?.let{put("fuelPricePerLiter",it)}
+}
+/** Editable choices only, never cached online paths or location history. */
+internal fun PlanRequest.choicesJson():JsonObject=buildJsonObject {
+    put("mode",mode.name);put("origin",origin.json());put("destination",destination.json());put("speedMps",speedMps)
+    put("stops",JsonArray(stops.map { it.json() }));vacation?.let { put("vacation",it.json()) }
+    put("drivingSpeedMode",speedControls.mode.name);put("driveMinMps",speedControls.driveMinMps);put("driveMaxMps",speedControls.driveMaxMps);put("followRoadLimits",speedControls.followRoadLimits)
+    flight?.let { f -> put("departureGroundMode",f.departureGroundMode.name);put("arrivalGroundMode",f.arrivalGroundMode.name);put("flightTransitMode",f.flightTransitMode.name);put("dwellSeconds",f.boardingMs/1000.0);put("radioPolicy",if(f.simulationOnly) "SIMULATION" else "MANUAL");f.originAirportId?.let{put("departureAirportId",it)};f.destinationAirportId?.let{put("arrivalAirportId",it)};flightSpeedMps?.let{put("flightSpeedMps",it)} }
+}
+internal fun RemainingEditContext.json():JsonObject=buildJsonObject {
+    put("editId",id);put("confirmedOrigin",confirmedOrigin.json());put("phase",phase?.let { JsonPrimitive(it.name) } ?: JsonNull);put("choices",choices.choicesJson());put("canUndo",canUndo)
 }

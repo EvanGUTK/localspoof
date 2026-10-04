@@ -11,3 +11,15 @@ test('Old sequence is rejected without renewing freshness; new placement ownersh
 test('Airborne ACKs interpolate even when the complete journey includes two ground legs',async()=>{const f=await fixture(),a={lat:1,lon:2},b={lat:1,lon:2.0006};const legs=[{kind:'DRIVE',points:[{lat:0,lon:0},{lat:0,lon:1}]},{kind:'FLIGHT',points:[a,b]}];f.tracker.update(sample(a,1,{owner:'FLIGHT:FLIGHT_INTERVAL:1',speedMps:350}),legs);f.step(200);f.tracker.update(sample(b,2,{owner:'FLIGHT:FLIGHT_INTERVAL:1',speedMps:350}),legs);f.step(100);assert.ok(f.points.at(-1).point.lon>a.lon&&f.points.at(-1).point.lon<b.lon);f.step(100);assert.deepEqual(f.points.at(-1).point,b);});
 
 test('An explicit short jump placement generation snaps without interpolation',async()=>{const f=await fixture(),a={lat:0,lon:0},b={lat:0,lon:.0001};f.tracker.update(sample(a,1,{owner:'DRIVE:NONE:1',speedMps:0}),[]);f.step(200);f.tracker.update(sample(b,2,{owner:'DRIVE:NONE:2',speedMps:0}),[]);assert.deepEqual(f.points.at(-1).point,b,'Even a ten-metre explicit jump is exact');f.step(100);assert.deepEqual(f.points.at(-1).point,b);});
+
+test('Flight line tessellation and acknowledged marker use identical spherical geometry',async()=>{
+ const {sphericalPoint,flightCoordinates}=await import('../../android/app/src/main/assets/mobile-map/motion.mjs');
+ const a={lat:35.0424,lon:-89.9767},b={lat:36.1263,lon:-86.6774},mid=sphericalPoint(a,b,.5),coordinates=flightCoordinates(a,b,18);
+ assert.ok(coordinates.length>65,'Close zoom refines the old fixed 64-edge line');
+ assert.ok(coordinates.some(([lon,lat])=>Math.abs(lon-mid.lon)<1e-10&&Math.abs(lat-mid.lat)<1e-10),'A confirmed midpoint lies exactly on the tessellated spherical line');
+ assert.deepEqual(coordinates[0],[a.lon,a.lat]);assert.deepEqual(coordinates.at(-1),[b.lon,b.lat]);assert.ok(coordinates.length<=8194,'Geometry stays bounded');
+ const crossing=flightCoordinates({lat:40,lon:179},{lat:40,lon:-179},14);assert.ok(crossing.every(([lon,lat])=>Math.abs(lon)>170&&lat>=40),'No flight detour across zero longitude');
+});
+test('Hidden map releases display frames and return expires stale acknowledged fixes',async()=>{
+ const f=await fixture();f.tracker.update(sample({lat:1,lon:2},1),[]);f.tracker.setVisible(false);assert.equal(f.frames.size,0);f.step(2000);f.tracker.setVisible(true);assert.equal(f.points.at(-1).stale,true);assert.deepEqual(f.points.at(-1).point,{lat:1,lon:2});
+});

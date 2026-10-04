@@ -1,6 +1,6 @@
 {
   "protocolMajor": 1,
-  "protocolMinor": 5,
+  "protocolMinor": 6,
   "comparisonVectors": [
     {
       "clientNonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -53,7 +53,7 @@
       "ok": true,
       "payload": {
         "protocolMajor": 1,
-        "protocolMinor": 5,
+        "protocolMinor": 6,
         "approvalPairing": true,
         "livePhoneLocation": true,
         "flightLegOptions": true,
@@ -68,7 +68,13 @@
         "routeStops": true,
         "motionTelemetry": true,
         "variableCruise": true,
-        "mappedRoadLimits": true
+        "mappedRoadLimits": true,
+        "remainingJourneyEdits": true,
+        "timedPause": true,
+        "vacationStops": true,
+        "vacationFuelStops": true,
+        "hotelStages": true,
+        "vacationCorrections": true
       }
     },
     "pairRequested": {
@@ -181,7 +187,8 @@
             "lon": 1.001
           },
           "label": "Destination",
-          "index": 0
+          "index": 0,
+          "kind": "PLACE"
         },
         "waitingFor": null,
         "speedControls": {
@@ -199,7 +206,14 @@
           "health": "IDLE",
           "placementGeneration": 0
         },
-        "desiredAirplaneMode": null
+        "desiredAirplaneMode": null,
+        "activePreview": null,
+        "activeChoices": null,
+        "editId": null,
+        "canUndo": false,
+        "timedPauseRemainingMs": null,
+        "stages": [],
+        "vacation": null
       }
     },
     "snapshotFlightAwait": {
@@ -250,7 +264,8 @@
             "lon": 1.001
           },
           "label": "Destination",
-          "index": 0
+          "index": 0,
+          "kind": "PLACE"
         },
         "waitingFor": "AIRPLANE_MODE",
         "speedControls": {
@@ -268,7 +283,14 @@
           "health": "WAITING",
           "placementGeneration": 1
         },
-        "desiredAirplaneMode": true
+        "desiredAirplaneMode": true,
+        "activePreview": null,
+        "activeChoices": null,
+        "editId": null,
+        "canUndo": false,
+        "timedPauseRemainingMs": null,
+        "stages": [],
+        "vacation": null
       }
     },
     "preparedFlight": {
@@ -366,6 +388,87 @@
             }
           ]
         }
+      }
+    },
+    "remainingEditBegun": {
+      "ok": true,
+      "sessionId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": 4,
+      "state": "PAUSED",
+      "point": {
+        "lat": 1,
+        "lon": 1
+      },
+      "phase": "DRIVING",
+      "payload": {
+        "editId": "11111111-1111-1111-1111-111111111111",
+        "confirmedOrigin": {
+          "lat": 1,
+          "lon": 1
+        },
+        "phase": "DRIVING",
+        "choices": {
+          "mode": "DRIVE",
+          "origin": {
+            "lat": 1,
+            "lon": 1
+          },
+          "destination": {
+            "lat": 1,
+            "lon": 1.002
+          },
+          "speedMps": 13.9,
+          "radioPolicy": "MANUAL",
+          "routeSource": "ONLINE_ROUTER",
+          "onlineRoute": {
+            "profile": "DRIVE",
+            "provider": "Synthetic fixture",
+            "points": [
+              {
+                "lat": 1,
+                "lon": 1
+              },
+              {
+                "lat": 1,
+                "lon": 1.001
+              },
+              {
+                "lat": 1,
+                "lon": 1.002
+              }
+            ]
+          },
+          "stops": [
+            {
+              "point": {
+                "lat": 1,
+                "lon": 1.001
+              },
+              "label": "Coffee",
+              "dwellSeconds": 20,
+              "id": "fuel-1",
+              "kind": "FUEL",
+              "fuel": {
+                "refillTargetLiters": 50,
+                "pricePerLiter": 1.1,
+                "currency": "USD"
+              }
+            }
+          ],
+          "stopPointIndices": [
+            1
+          ],
+          "vacation": {
+            "tankLiters": 60,
+            "startingFuelLiters": 24,
+            "reserveLiters": 5,
+            "litersPer100Km": 8,
+            "fuelGrade": "REGULAR",
+            "currency": "USD",
+            "fuelPricePerLiter": 1.1
+          }
+        },
+        "canUndo": false
       }
     }
   },
@@ -466,6 +569,155 @@
       "driveMinMps": 40.2336,
       "driveMaxMps": 55.88,
       "followRoadLimits": true
+    },
+    "beginRemainingEdit": {
+      "useUndo": false
+    },
+    "beginUndo": {
+      "useUndo": true
+    },
+    "prepareRemainingPlan": {
+      "editId": "11111111-1111-1111-1111-111111111111",
+      "request": {
+        "mode": "DRIVE",
+        "origin": {
+          "lat": 1,
+          "lon": 1
+        },
+        "destination": {
+          "lat": 1,
+          "lon": 1.002
+        },
+        "speedMps": 13.9,
+        "radioPolicy": "MANUAL",
+        "routeSource": "ONLINE_ROUTER",
+        "onlineRoute": {
+          "profile": "DRIVE",
+          "provider": "Synthetic fixture",
+          "points": [
+            {
+              "lat": 1,
+              "lon": 1
+            },
+            {
+              "lat": 1,
+              "lon": 1.001
+            },
+            {
+              "lat": 1,
+              "lon": 1.002
+            }
+          ]
+        },
+        "stops": [
+          {
+            "point": {
+              "lat": 1,
+              "lon": 1.001
+            },
+            "label": "Coffee",
+            "dwellSeconds": 20
+          }
+        ],
+        "stopPointIndices": [
+          1
+        ]
+      }
+    },
+    "applyRemainingPlan": {
+      "editId": "11111111-1111-1111-1111-111111111111",
+      "preparedId": "22222222-2222-2222-2222-222222222222"
+    },
+    "cancelRemainingEdit": {
+      "editId": "11111111-1111-1111-1111-111111111111"
+    },
+    "timedPause": {
+      "durationSeconds": 300
+    },
+    "leaveStop": {},
+    "updateVacation": {
+      "remainingFuelLiters": 18,
+      "litersPer100Km": 8,
+      "reserveLiters": 5
+    },
+    "vacationDrive": {
+      "mode": "DRIVE",
+      "origin": {
+        "lat": 1,
+        "lon": 1
+      },
+      "destination": {
+        "lat": 1,
+        "lon": 1.002
+      },
+      "speedMps": 13.9,
+      "radioPolicy": "MANUAL",
+      "routeSource": "ONLINE_ROUTER",
+      "onlineRoute": {
+        "profile": "DRIVE",
+        "provider": "Synthetic fixture",
+        "points": [
+          {
+            "lat": 1,
+            "lon": 1
+          },
+          {
+            "lat": 1,
+            "lon": 1.001
+          },
+          {
+            "lat": 1,
+            "lon": 1.002
+          }
+        ]
+      },
+      "stops": [
+        {
+          "point": {
+            "lat": 1,
+            "lon": 1.001
+          },
+          "label": "Coffee",
+          "dwellSeconds": 20,
+          "id": "fuel-1",
+          "kind": "FUEL",
+          "fuel": {
+            "refillTargetLiters": 50,
+            "pricePerLiter": 1.1,
+            "currency": "USD"
+          }
+        }
+      ],
+      "stopPointIndices": [
+        1
+      ],
+      "vacation": {
+        "tankLiters": 60,
+        "startingFuelLiters": 24,
+        "reserveLiters": 5,
+        "litersPer100Km": 8,
+        "fuelGrade": "REGULAR",
+        "currency": "USD",
+        "fuelPricePerLiter": 1.1
+      }
+    },
+    "hotelStop": {
+      "id": "hotel-1",
+      "point": {
+        "lat": 1,
+        "lon": 1.01
+      },
+      "label": "Hotel",
+      "kind": "HOTEL",
+      "dwellSeconds": 30000,
+      "hotel": {
+        "checkInSeconds": 900,
+        "staySeconds": 28800,
+        "checkOutSeconds": 300,
+        "nights": 1,
+        "nightlyPrice": 110,
+        "currency": "USD"
+      }
     }
   }
 }

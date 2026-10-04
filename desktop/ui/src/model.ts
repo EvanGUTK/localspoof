@@ -1,4 +1,5 @@
 import {decodeSegments} from './journey.ts';
+import type {TripStop,Vacation} from './vacation.ts';
 import type {JourneySegment} from './journey.ts';
 export type Point = { lat: number; lon: number };
 export type Mode = 'INSTANT' | 'WALK' | 'DRIVE' | 'FLIGHT';
@@ -6,7 +7,7 @@ export type Device = { serial: string; state: string; model?: string };
 export type GroundMode='DRIVE'|'INSTANT';
 export type FlightTransitMode='TIMED'|'JUMP';
 export type PlanInput = { mode: string; originLat: string; originLon: string; destinationLat: string; destinationLon: string; speed: string; dwell: string; flightDuration: string; radioPolicy: string;departureGroundMode?:string;arrivalGroundMode?:string;flightTransitMode?:string };
-export type Plan = { mode: Mode; origin: Point; destination: Point; speedMps: number; waypoints: Point[]; stops?:{point:Point;dwellSeconds:number;label?:string}[];flightSpeedMps?:number;drivingSpeedMode?:'FIXED'|'VARIABLE';driveMinMps?:number;driveMaxMps?:number;followRoadLimits?:boolean; dwellSeconds: number; flightDurationSeconds: number; radioPolicy: 'MANUAL' | 'SIMULATION' | 'USB';departureGroundMode?:GroundMode;arrivalGroundMode?:GroundMode;flightTransitMode?:FlightTransitMode };
+export type Plan = { mode: Mode; origin: Point; destination: Point; speedMps: number; waypoints: Point[]; stops?:TripStop[];vacation?:Vacation;flightSpeedMps?:number;drivingSpeedMode?:'FIXED'|'VARIABLE';driveMinMps?:number;driveMaxMps?:number;followRoadLimits?:boolean; dwellSeconds: number; flightDurationSeconds: number; radioPolicy: 'MANUAL' | 'SIMULATION' | 'USB';departureGroundMode?:GroundMode;arrivalGroundMode?:GroundMode;flightTransitMode?:FlightTransitMode };
 export type GeoPack = { schemaVersion: 1; id: string; name: string; bounds: { south: number; west: number; north: number; east: number }; nodes: {id: string;lat: number;lon: number}[]; edges: {from:string;to:string;modes: ('WALK'|'DRIVE')[]; speedLimitMps: number; speedLimitSource?:'MAPPED'|'ESTIMATED'|'UNKNOWN'; bidirectional: boolean}[]; places: {id:string;name:string;lat:number;lon:number}[]; polygons: Point[][]; source:string;attribution:string };
 const fail = (message: string): never => { throw new Error(message); };
 export function validateAdbPath(value:string):string{
@@ -42,18 +43,18 @@ export const unproject = (x:number,y:number,center:Point,zoom:number,width:numbe
 export function distance(a:Point,b:Point):number { const rad=Math.PI/180, dLat=(b.lat-a.lat)*rad,dLon=longitudeDelta(b.lon,a.lon)*rad;const h=Math.sin(dLat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLon/2)**2;return 6371008.8*2*Math.asin(Math.min(1,Math.sqrt(h))); }
 export const flightSuggested = (meters:number):boolean => meters>402336;
 export type Preview={points:Point[];distanceM:number;durationSeconds:number;departureAirportName?:string;arrivalAirportName?:string;originAirportAccessPoint?:Point;destinationAirportAccessPoint?:Point;segments:JourneySegment[];departureGroundMode?:GroundMode;arrivalGroundMode?:GroundMode;flightTransitMode?:FlightTransitMode;simplified:boolean};
-export function decodePreview(value:unknown):Preview{
+export function decodePreview(value:unknown,remaining=false):Preview{
   const preview=object(value),geometry=list(preview.geometry,8192);if(geometry.length===0)fail('Phone returned an empty route preview.');
   const points=geometry.map(value=>{const p=object(value);return point(finite(p.lat),finite(p.lon));});
   const distanceM=finite(preview.distanceMeters),durationMs=finite(preview.durationMs);if(distanceM<0||durationMs<0)fail('Phone preview duration is invalid.');
   const airportName=(value:unknown):string|undefined=>value==null?undefined:label(object(value).name);
   const accessPoints:Pick<Preview,'originAirportAccessPoint'|'destinationAirportAccessPoint'>={};
   for(const key of ['originAirportAccessPoint','destinationAirportAccessPoint'] as const){if(preview[key]!=null){const p=object(preview[key]);accessPoints[key]=point(finite(p.lat),finite(p.lon));}}
-  const segments=decodeSegments(preview.segments);
+  const segments=decodeSegments(preview.segments,remaining);
   let flightOptions:Pick<Preview,'departureGroundMode'|'arrivalGroundMode'|'flightTransitMode'>={};
   if(preview.mode==='FLIGHT'){
-    if(segments.length!==3||!['DRIVE','INSTANT'].includes(String(preview.departureGroundMode))||!['DRIVE','INSTANT'].includes(String(preview.arrivalGroundMode))||!['TIMED','JUMP'].includes(String(preview.flightTransitMode)))fail('Phone returned invalid flight preview options.');
-    if(segments[0]!.kind!==preview.departureGroundMode||segments[2]!.kind!==preview.arrivalGroundMode||(preview.flightTransitMode==='JUMP'?segments[1]!.durationMs!==0:segments[1]!.durationMs<1000))fail('Phone returned inconsistent flight preview options.');
+    if((remaining?segments.length<1:segments.length!==3)||!['DRIVE','INSTANT'].includes(String(preview.departureGroundMode))||!['DRIVE','INSTANT'].includes(String(preview.arrivalGroundMode))||!['TIMED','JUMP'].includes(String(preview.flightTransitMode)))fail('Phone returned invalid flight preview options.');
+    const departure=segments.find(s=>s.role==='DEPARTURE'),air=segments.find(s=>s.role==='AIR'),arrival=segments.find(s=>s.role==='ARRIVAL');if(departure&&departure.kind!==preview.departureGroundMode||arrival?.kind!==preview.arrivalGroundMode||air&&(preview.flightTransitMode==='JUMP'?air.durationMs!==0:air.durationMs<(remaining?0:1000)))fail('Phone returned inconsistent flight preview options.');
     flightOptions={departureGroundMode:preview.departureGroundMode as GroundMode,arrivalGroundMode:preview.arrivalGroundMode as GroundMode,flightTransitMode:preview.flightTransitMode as FlightTransitMode};
   }else if(segments.length)fail('Phone returned flight segments for an ordinary journey.');
   return {...flightOptions,segments,points,distanceM,durationSeconds:durationMs/1000,departureAirportName:airportName(preview.originAirport),arrivalAirportName:airportName(preview.destinationAirport),simplified:preview.geometrySimplified===true,...accessPoints};

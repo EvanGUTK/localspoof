@@ -23,7 +23,7 @@ internal class MobileSavedStore(context: Context) {
         private val lock = Any()
         const val MAX_BYTES = 524288
         private val common = setOf("id", "name", "group", "kind", "destination")
-        private val route = common + setOf("origin", "mode", "speedMps", "walkSpeedMps", "driveSpeedMps", "planeSpeedMps", "waypoints", "stopDwellSeconds", "dwellSeconds", "flightDurationSeconds", "radioPolicy", "departureGroundMode", "arrivalGroundMode", "flightTransitMode", "departureAirportId", "arrivalAirportId", "stops", "flightSpeedMps", "customPath", "drivingSpeedMode", "driveMinMps", "driveMaxMps", "followRoadLimits")
+        private val route = common + setOf("origin", "mode", "speedMps", "walkSpeedMps", "driveSpeedMps", "planeSpeedMps", "waypoints", "stopDwellSeconds", "dwellSeconds", "flightDurationSeconds", "radioPolicy", "departureGroundMode", "arrivalGroundMode", "flightTransitMode", "departureAirportId", "arrivalAirportId", "stops", "flightSpeedMps", "customPath", "drivingSpeedMode", "driveMinMps", "driveMaxMps", "followRoadLimits", "vacation")
         fun newItem(name: String, group: String, draft: MobileDraft) = MobileSavedItem(UUID.randomUUID().toString(), name.trim(), group.trim(), if (draft.mode == Mode.INSTANT) "PLACE" else "ROUTE", draft.copy(placeQuery = "", airportQuery = "", preparedId = null, busy = false, speedError = null))
         private fun point(lat: String, lon: String) = GeoPoint(lat.toDouble(), lon.toDouble())
         private fun jsonPoint(point: GeoPoint) = buildJsonObject { put("lat", point.lat); put("lon", point.lon) }
@@ -44,13 +44,15 @@ internal class MobileSavedStore(context: Context) {
                         mobileDrivingControls(d)
                         require(d.speedMps.isFinite() && d.speedMps in 0.1..56.0 && (d.mode != Mode.WALK || d.speedMps <= 3))
                         require(d.flightSpeedMps.isFinite() && d.flightSpeedMps in 30.0..350.0)
+                        require(d.stops.none { it.kind == StopKind.FUEL } || d.vacation.enabled)
                         require(d.stops.size <= 32 && (d.stops.isEmpty() || d.mode in setOf(Mode.WALK, Mode.DRIVE)))
                         require(d.departureId.length <= 128 && d.arrivalId.length <= 128 && (d.departureId + d.arrivalId).none { it.isISOControl() })
                         val seconds = d.flightSeconds.toDoubleOrNull() ?: throw IllegalArgumentException("INVALID_DURATION")
                         require(seconds.isFinite() && seconds in 1.0..86400.0)
                         put("origin", jsonPoint(point(d.originLat, d.originLon))); put("mode", d.mode.name); put("speedMps", d.speedMps); put("planeSpeedMps", d.flightSpeedMps)
                         put("drivingSpeedMode", d.drivingSpeedMode.name); put("driveMinMps", d.driveMinMps); put("driveMaxMps", d.driveMaxMps); put("followRoadLimits", d.followRoadLimits)
-                        put("stops", buildJsonArray { d.stops.forEach { stop -> add(buildJsonObject { put("point", jsonPoint(stop.point)); put("dwellSeconds", stop.dwellMs / 1000.0); put("label", stop.label) }) } }); put("customPath", d.customPath)
+                        put("stops", JsonArray(d.stops.map { it.json() })); put("customPath", d.customPath)
+                        mobileVacationConfig(d.vacation)?.let { require(d.mode == Mode.DRIVE); put("vacation", it.json()) }
                         put("flightDurationSeconds", seconds); put("dwellSeconds", d.boardingHoldSeconds.toDouble().also { require(it.isFinite() && it in 0.0..3600.0) }); put("radioPolicy", if (d.simulationOnly) "SIMULATION" else "MANUAL")
                         put("departureGroundMode", d.departureGroundMode.name); put("arrivalGroundMode", d.arrivalGroundMode.name); put("flightTransitMode", d.flightTransitMode.name)
                         put("departureAirportId", d.departureId.takeIf { it.isNotBlank() }?.let(::JsonPrimitive) ?: JsonNull); put("arrivalAirportId", d.arrivalId.takeIf { it.isNotBlank() }?.let(::JsonPrimitive) ?: JsonNull)
@@ -92,17 +94,19 @@ internal class MobileSavedStore(context: Context) {
                 val waypoints = o["waypoints"]?.jsonArray ?: JsonArray(emptyList()); require(waypoints.size <= 32 && (waypoints.isEmpty() || mode in setOf(Mode.WALK, Mode.DRIVE)))
                 val stopData = o["stops"]?.jsonArray ?: JsonArray(emptyList()); require(stopData.size <= 32 && (stopData.isEmpty() || mode in setOf(Mode.WALK, Mode.DRIVE)))
                 require(o["stops"] == null || o["waypoints"] == null || waypoints.isEmpty())
-                val stops = if (o["stops"] != null) stopData.mapIndexed { index, rawStop ->
-                    val stop = rawStop.jsonObject; require(stop.keys.all { it in setOf("point", "dwellSeconds", "label") } && setOf("point", "dwellSeconds").all { it in stop })
-                    stop["label"]?.let { require(it.jsonPrimitive.isString) }
-                    val wait = stop.getValue("dwellSeconds").jsonPrimitive.also { require(!it.isString) }.double; require(wait.isFinite() && wait in 0.0..3600.0)
-                    RouteStop(readPoint(stop.getValue("point")), (wait * 1000).toLong(), stop["label"]?.jsonPrimitive?.content ?: "Stop ${index + 1}")
-                } else waypoints.mapIndexed { i, p -> RouteStop(readPoint(p), (dwell * 1000).toLong(), "Stop ${i + 1}") }
+                val stops = if (o["stops"] != null) parseRequest(buildJsonObject {
+                    put("mode", mode.name); put("origin", jsonPoint(origin)); put("destination", jsonPoint(destination)); put("stops", stopData); o["vacation"]?.let { put("vacation", it) }
+                }).stops else waypoints.mapIndexed { i, p -> RouteStop(readPoint(p), (dwell * 1000).toLong(), "Stop ${i + 1}") }
+                val vacation = o["vacation"]?.takeUnless { it is JsonNull }?.jsonObject?.let(::parseVacation)
+                require(vacation == null || mode == Mode.DRIVE)
+                val vacationDraft = vacation?.let { MobileVacationDraft(enabled = true, metric = true, tank = it.tankLiters.toString(), consumption = it.litersPer100Km.toString(),
+                    startingMethod = MobileFuelInput.AMOUNT, starting = it.startingFuelLiters.toString(), reserve = it.reserveLiters.toString(), grade = it.fuelGrade,
+                    price = it.fuelPricePerLiter?.toString() ?: "", currency = it.currency) } ?: MobileVacationDraft()
                 val radio = o["radioPolicy"]?.jsonPrimitive?.content ?: "MANUAL"; require(radio in setOf("MANUAL", "SIMULATION", "USB"))
                 fun airport(key: String) = o[key]?.jsonPrimitive?.also { require(it is JsonNull || it.isString) }?.contentOrNull?.also { require(it.length <= 128 && it.none { c -> c.isISOControl() }) } ?: ""
                 MobileSavedItem(o.getValue("id").jsonPrimitive.content, o.getValue("name").jsonPrimitive.content, o.getValue("group").jsonPrimitive.content, kind,
                     MobileDraft(drivingSpeedMode = drivingMode, driveMinMps = minimum, driveMaxMps = maximum, driveMinText = mobileFormatSpeed(minimum, MobileSpeedUnit.MPH), driveMaxText = mobileFormatSpeed(maximum, MobileSpeedUnit.MPH), followRoadLimits = follows, mode = mode, originLat = origin.lat.toString(), originLon = origin.lon.toString(), destinationLat = destination.lat.toString(), destinationLon = destination.lon.toString(), speedMps = speed, speedText = mobileFormatSpeed(speed, MobileSpeedUnit.MPH), flightSpeedMps = air, flightSpeedText = mobileFormatSpeed(air, MobileSpeedUnit.MPH), flightSeconds = duration.toString(), boardingHoldSeconds = boarding.toString(), departureId = airport("departureAirportId"), arrivalId = airport("arrivalAirportId"),
-                        departureGroundMode = GroundLegMode.valueOf(o["departureGroundMode"]?.jsonPrimitive?.content ?: "DRIVE"), arrivalGroundMode = GroundLegMode.valueOf(o["arrivalGroundMode"]?.jsonPrimitive?.content ?: "DRIVE"), flightTransitMode = FlightTransitMode.valueOf(o["flightTransitMode"]?.jsonPrimitive?.content ?: "TIMED"), simulationOnly = radio == "SIMULATION", customPath = o["customPath"]?.jsonPrimitive?.boolean ?: false, stops = stops), portable = o)
+                        departureGroundMode = GroundLegMode.valueOf(o["departureGroundMode"]?.jsonPrimitive?.content ?: "DRIVE"), arrivalGroundMode = GroundLegMode.valueOf(o["arrivalGroundMode"]?.jsonPrimitive?.content ?: "DRIVE"), flightTransitMode = FlightTransitMode.valueOf(o["flightTransitMode"]?.jsonPrimitive?.content ?: "TIMED"), simulationOnly = radio == "SIMULATION", customPath = o["customPath"]?.jsonPrimitive?.boolean ?: false, stops = stops, vacation = vacationDraft), portable = o)
             }
             items.forEach(::validateName); require(items.map { it.id }.distinct().size == items.size)
             return items

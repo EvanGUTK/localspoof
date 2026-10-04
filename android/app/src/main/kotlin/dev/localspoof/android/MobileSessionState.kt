@@ -4,18 +4,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import dev.localspoof.domain.*
 import dev.localspoof.domain.Mode
 import dev.localspoof.domain.GroundLegMode
 import dev.localspoof.domain.FlightTransitMode
 
 /** Retained only in RAM across configuration changes; no saved-state or persistence adapter. */
 internal class MobileSessionState : ViewModel() {
+    val mapOverlay = MobileMapOverlayState()
     var section by mutableStateOf(MobileSection.MAP)
     var draft by mutableStateOf(MobileDraft())
     var preferences by mutableStateOf(MobilePreferences())
     var walkDefaultText by mutableStateOf(mobileFormatSpeed(preferences.walkSpeedMps, preferences.speedUnit))
     var driveDefaultText by mutableStateOf(mobileFormatSpeed(preferences.driveSpeedMps, preferences.speedUnit))
     var settingsError by mutableStateOf<String?>(null)
+    var remainingEdit by mutableStateOf<MobileRemainingDraft?>(null)
+        private set
+    private var beforeEdit: MobileDraft? = null
     private var generation = 0L
     private var preparationSequence = 0L
     private var preparationOwner: Long? = null
@@ -37,13 +42,48 @@ internal class MobileSessionState : ViewModel() {
     fun cancelPendingPreparation() { invalidate(); preparationOwner = null; draft = draft.copy(busy = false) }
     private fun preset(mode: Mode): Double = if (mode == Mode.WALK) preferences.walkSpeedMps else preferences.driveSpeedMps
     fun clearActivity() {
+        remainingEdit = null; beforeEdit = null
+        mapOverlay.viewport = null; mapOverlay.nearby = emptyList(); mapOverlay.follow = false
         cancelPendingPreparation()
         val speed = preset(draft.mode)
         draft = MobileDraft(mode = draft.mode, speedMps = speed, speedText = mobileFormatSpeed(speed, preferences.speedUnit), driveMinText = mobileFormatSpeed(40.2336, preferences.speedUnit), driveMaxText = mobileFormatSpeed(55.88, preferences.speedUnit))
     }
+    fun startRemainingEdit(context: MobileRemainingDraft) {
+        cancelPendingPreparation()
+        if (remainingEdit == null) beforeEdit = draft
+        remainingEdit = context
+        val request = context.choices
+        val controls = request.speedControls
+        draft = draft.copy(mode = request.mode, originLat = context.confirmedOrigin.lat.toString(), originLon = context.confirmedOrigin.lon.toString(), originLabel = "Current confirmed position",
+            destinationLat = request.destination.lat.toString(), destinationLon = request.destination.lon.toString(), destinationLabel = "Remaining destination",
+            speedMps = request.speedMps, speedText = mobileFormatSpeed(request.speedMps, preferences.speedUnit),
+            flightSpeedMps = request.flightSpeedMps ?: draft.flightSpeedMps, flightSpeedText = mobileFormatSpeed(request.flightSpeedMps ?: draft.flightSpeedMps, preferences.speedUnit),
+            departureId = request.flight?.originAirportId ?: "", arrivalId = request.flight?.destinationAirportId ?: "",
+            departureGroundMode = request.flight?.departureGroundMode ?: GroundLegMode.DRIVE, arrivalGroundMode = request.flight?.arrivalGroundMode ?: GroundLegMode.DRIVE,
+            flightTransitMode = request.flight?.flightTransitMode ?: FlightTransitMode.TIMED, simulationOnly = request.flight?.simulationOnly ?: false,
+            boardingHoldSeconds = ((request.flight?.boardingMs ?: 30000) / 1000).toString(),
+            stops = request.stops, customPath = false, preparedId = null, busy = false, speedError = null, flightSpeedError = null, drivingError = null,
+            drivingSpeedMode = controls.mode, driveMinMps = controls.driveMinMps, driveMaxMps = controls.driveMaxMps,
+            driveMinText = mobileFormatSpeed(controls.driveMinMps, preferences.speedUnit), driveMaxText = mobileFormatSpeed(controls.driveMaxMps, preferences.speedUnit), followRoadLimits = controls.followRoadLimits,
+            vacation = request.vacation?.let { MobileVacationDraft(enabled = true, metric = true, tank = it.tankLiters.toString(), consumption = it.litersPer100Km.toString(),
+                startingMethod = MobileFuelInput.AMOUNT, starting = it.startingFuelLiters.toString(), reserve = it.reserveLiters.toString(), grade = it.fuelGrade, price = it.fuelPricePerLiter?.toString() ?: "", currency = it.currency) } ?: MobileVacationDraft())
+        section = MobileSection.JOURNEY
+    }
+    fun attachEditHold(context: RemainingEditContext) { remainingEdit = remainingEdit?.copy(held = context) }
+    fun releaseEditHold() { remainingEdit = remainingEdit?.copy(held = null) }
+    fun finishRemainingEdit(applied: Boolean) {
+        cancelPendingPreparation()
+        if (!applied) beforeEdit?.let { draft = it.copy(preparedId = null, busy = false) }
+        beforeEdit = null; remainingEdit = null
+        section = MobileSection.MAP
+    }
     fun selectMode(mode: Mode) {
+        remainingEdit?.let { edit ->
+            if (edit.choices.mode == Mode.FLIGHT && mode != Mode.FLIGHT || edit.choices.mode != Mode.FLIGHT && mode !in setOf(Mode.WALK, Mode.DRIVE) || edit.choices.vacation != null && mode != Mode.DRIVE) return
+        }
         invalidate()
         val speed = preset(mode)
+        mapOverlay.placeRole = "Destination"; mapOverlay.nearby = emptyList()
         draft = draft.copy(mode = mode, stops = if (mode in setOf(Mode.WALK, Mode.DRIVE)) draft.stops else emptyList(), speedMps = speed, speedText = mobileFormatSpeed(speed, preferences.speedUnit), speedError = null)
     }
     fun selectDrivingMode(mode: dev.localspoof.domain.DrivingSpeedMode) { invalidate(); draft = draft.copy(drivingSpeedMode = mode) }

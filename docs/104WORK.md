@@ -1,10 +1,10 @@
 # 104WORK — next-session usability, gas Vacation and map fixes
 
-Updated: 2026-10-03. Status: documentation handoff for tomorrow. The user selected all seven usability additions and requested the gas-only Vacation planner, cost estimates, phone map/follow fixes and dot/route alignment investigation below. Selection establishes the next planned scope; implementation resumes in the next work session. The user subsequently requested this handoff be named **104WORK** and made available through the private Git repository for laptop continuation. Documentation commit/push is in scope; no app code, device action, rebuild or installation is performed today.
+Updated: 2026-10-04. Status: implementation resumed at the user's request. The user selected all seven usability additions and requested the gas-only Vacation planner, cost estimates, phone map/follow fixes and dot/route alignment investigation below. This is the canonical **104WORK** handoff in the private Git repository. Previous documentation-only restrictions applied to those earlier turns; the user has now authorized building, review and verification. Planned behavior below remains unqualified until recorded implementation and test evidence establishes it.
 
 The user's two requested journey changes are **change destination during a route** and **change an upcoming airport during a flight journey**. **Follow the dot** and reliable map return are priority usability fixes. All proposed behavior applies to Windows and Android, with desktop-to-Android control remaining the primary workflow. Vacation planning is **gasoline/diesel only for this iteration**; EV/Tesla charging remains deferred.
 
-## Start here tomorrow
+## Original plan and remaining qualification
 
 Before broader implementation, investigate the post-landing location update report below. Compare Android provider delivery with Life360 freshness; LocalSpoof's Live status alone does not qualify third-party receipt.
 
@@ -35,7 +35,7 @@ Keep diagnostic comparisons bounded and in RAM; do not introduce production acti
 
 Life360 also showed flight activity. Its documented flight-detection conditions include airport proximity, speed above 100 MPH and airplane-mode transitions. Airplane mode is not a guarantee of unrecorded travel; restoring connectivity does not establish that no activity was detected offline. Treat this as a compatibility limitation, not a promise to suppress another app's history or classifications. [Life360 flight detection](https://support.life360.com/hc/en-us/articles/23053396597271-Flight-Detection-Landing-Notifications).
 
-## User-reported phone defects — unresolved
+## User-reported phone defects — original investigation notes
 
 **Map disappears on return:** the user reports that opening Settings or leaving Map and returning causes the phone map not to show. This is a new runtime report after the previous fixes; earlier successful map qualification does not resolve it. The defect has not been reproduced in this documentation-only turn, and its cause is not yet established.
 
@@ -119,7 +119,7 @@ Validate every changed airport at the phone boundary and rebuild only affected, 
 
 ## Seven selected usability additions
 
-The user selected **all seven**. They remain planned, not implemented by this document update.
+The user selected **all seven**. They are implemented in 0.7; the requirements below preserve the approved plan. See the final checkpoint and validation for evidence and physical qualifications still pending.
 
 | ID | Idea | Concrete user benefit | Priority suggestion |
 |---|---|---|---|
@@ -183,6 +183,8 @@ Support speed-dependent consumption only from a reviewed model with identified i
 ### Hotel prices and trip budget
 
 Add optional hotel stops and a hotel budget to Vacation mode. Let users enter an average nightly price, number of nights and currency; allow each chosen hotel to override the nightly estimate and nights. Enter known taxes/fees separately; missing fees are Unknown, not silently treated as a verified zero. Show lodging total, fuel total and combined estimated trip cost alongside ETA. A hotel stop's planned stay duration affects journey ETA independently of the number of paid nights.
+
+The user also requested explicit hotel arrival and departure behavior: configurable **check-in → stay → checkout** durations, a hold at the acknowledged hotel location, and **Leave now** to end the remaining hotel hold and continue the approved route. Include all planned durations in ETA independently of billed nights. Pause/Stop, reconnect and a route edit must not replay a completed check-in, checkout or lodging cost. Leave now never starts a stopped journey, bypasses a radio gate or jumps to an unrelated location. This simulates a stop; it does not perform a hotel reservation or real check-in.
 
 Map/place results supply locations, not verified room rates. Any bundled regional hotel average must have a justified source, region and as-of date; otherwise ask for the user's estimate. No live booking API, reservation, room availability or hotel-price scraping is approved. Never present an invented rate as a hotel quote. Automatic overnight hotel placement is not required for the initial version: users add a hotel or budget nights explicitly.
 
@@ -254,7 +256,7 @@ gh repo clone EvanGUTK/localspoof
 Set-Location localspoof
 ```
 
-Open that folder in Codex and start with: **“Read docs/104WORK.md and docs/BUILD_HANDOFF_SOL_6_1.md. Continue the planned work, starting with map return, phone Follow and dot/route alignment. Inspect current source before changing it.”** Git provides the source and this written context; do not assume signing in alone copies this machine's workspace or build tools.
+Open that folder in Codex and start with: **“Read docs/104WORK.md and docs/BUILD_HANDOFF_SOL_6_1.md. Read the 0.7 implementation and validation handoffs; continue the remaining controlled device qualification. Inspect current source before changing it.”** Git provides the source and this written context; do not assume signing in alone copies this machine's workspace or build tools.
 
 For builds, use [Windows toolchains](WINDOWS_TOOLCHAINS.md), [Android build notes](ANDROID_BUILD.md) and [desktop build notes](DESKTOP_BUILD.md). This machine has Java 17 for compilation and a separate Java 21 runtime for Android unit tests, Android SDK/platform tools, Node, Rust/MSVC and Tauri tooling. Verify availability on the laptop, regenerate dependencies/builds there and adapt local paths rather than copying old `.build/` scripts with machine-specific paths. Phone QA requires connecting/authorizing the laptop and approving its desktop controller.
 
@@ -262,4 +264,13 @@ Future release APK updates must use the existing signing identity. Transfer the 
 
 An alternative is configured remote access to this original computer, where its tools and files stay available; it must remain online. Supported Codex/ChatGPT remote connections and explicit chat handoff can retain a conversation/host context, but they are a configured workflow, not automatic Git/workspace replication. Availability depends on the client and rollout. [Official remote connection and chat-handoff documentation](https://developers.openai.com/codex/remote-connections). No remote access or chat transfer is configured by this documentation task.
 
-Sensor spoofing remains deferred at the user's request. This handoff makes no additional Life360 compatibility claims. All seven usability additions and gas-only Vacation scope are selected for future work; map-return, missing Follow, dot/route alignment and desktop map-click route disappearance reports are unresolved. Today's changes are documentation and its requested GitHub synchronization, not application implementation.
+Sensor spoofing remains deferred at the user's request. This handoff makes no additional Life360 compatibility claims. All seven usability additions and gas-only Vacation scope have now been implemented in 0.7.0. Map-return, visible Follow, spherical dot/line alignment and desktop click preservation have source/regression coverage. Physical qualification remains separately recorded in VALIDATION_0_7.md; previous documentation-only statements describe the October 3 planning session.
+
+
+## Implementation checkpoint — 2026-10-04
+
+Matching 0.7.0/minor-6 sources implement the selected scope above. The domain owns held-point edits, acknowledged stops, monotonic timers, exactly-once Vacation events, immutable radio ownership and current-fuel corrections. Mobile/desktop render approved and candidate geometry separately. Automatic road/station planning and the vehicle catalog run on Windows; Android supports manual/custom/offline choices and connected control. See [current implementation handoff](HANDOFF_0_7_SOL_6_1.md) and [validation](VALIDATION_0_7.md) for exact evidence, artifacts and remaining qualifications.
+
+Current intentional limits: gas/diesel Drive Vacation only; constant consumption estimates and manually verified tank capacities; manual hotel prices/fees; no verified live station grade/price/availability; no foreign-exchange conversion. During an ongoing refill, automatic station recalculation asks the user to finish that stop or edit manually; the phone preserves its in-progress refill. Editing cancels timed resume and keeps an originally paused journey paused until Resume. EV, sensor spoofing, standalone Android online road planning and production wireless control remain deferred.
+
+The separate development observer at `tools/location-probe/` compares latest GPS, network and Google Fused Location fixes in RAM without injecting locations, uploading data, persisting a history or touching another app. It is built/linted, but the actual post-landing comparison is still pending. No unrelated test location or journey is authorized on the user's live phone in this session.

@@ -46,7 +46,7 @@ fn validate_hello(response: &Value) -> Result<Value, NativeError> {
         || payload
             .get("protocolMinor")
             .and_then(Value::as_u64)
-            .is_none_or(|minor| minor < 5)
+            .is_none_or(|minor| minor < 6)
         || payload.get("approvalPairing").and_then(Value::as_bool) != Some(true)
         || payload.get("livePhoneLocation").and_then(Value::as_bool) != Some(true)
         || payload.get("flightLegOptions").and_then(Value::as_bool) != Some(true)
@@ -55,6 +55,15 @@ fn validate_hello(response: &Value) -> Result<Value, NativeError> {
         || payload.get("motionTelemetry").and_then(Value::as_bool) != Some(true)
         || payload.get("variableCruise").and_then(Value::as_bool) != Some(true)
         || payload.get("mappedRoadLimits").and_then(Value::as_bool) != Some(true)
+        || [
+            "remainingJourneyEdits",
+            "timedPause",
+            "vacationFuelStops",
+            "hotelStages",
+            "vacationCorrections",
+        ]
+        .iter()
+        .any(|key| payload.get(*key).and_then(Value::as_bool) != Some(true))
         || payload.get("frameworkMock").and_then(Value::as_bool) != Some(true)
         || payload.get("pairingRequired").and_then(Value::as_bool) != Some(true)
         || !payload
@@ -110,6 +119,12 @@ fn validate_hello(response: &Value) -> Result<Value, NativeError> {
         "onlineRouteGeometry",
         "onlineFlightGroundRoutes",
         "maxOnlineRoutePoints",
+        "remainingJourneyEdits",
+        "timedPause",
+        "vacationFuelStops",
+        "vacationStops",
+        "hotelStages",
+        "vacationCorrections",
     ];
     Ok(Value::Object(
         payload
@@ -206,6 +221,13 @@ pub fn validate_request(request: &PhoneRequest) -> Result<(), NativeError> {
         "CommitGeoPack",
         "SetSpeeds",
         "JumpToNextStop",
+        "BeginRemainingEdit",
+        "PrepareRemainingPlan",
+        "ApplyRemainingPlan",
+        "CancelRemainingEdit",
+        "TimedPause",
+        "LeaveStop",
+        "UpdateVacation",
     ]
     .contains(&request.r#type.as_str())
     {
@@ -259,6 +281,68 @@ pub fn validate_request(request: &PhoneRequest) -> Result<(), NativeError> {
         }
     }
 
+    if [
+        "BeginRemainingEdit",
+        "PrepareRemainingPlan",
+        "ApplyRemainingPlan",
+        "CancelRemainingEdit",
+        "TimedPause",
+        "LeaveStop",
+    ]
+    .contains(&request.r#type.as_str())
+    {
+        let v = request
+            .payload
+            .as_object()
+            .ok_or(NativeError::InvalidRequest)?;
+        let valid_id = |key: &str| {
+            v.get(key).and_then(Value::as_str).is_some_and(|id| {
+                !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+            })
+        };
+        let valid = match request.r#type.as_str() {
+            "BeginRemainingEdit" => {
+                v.keys().all(|k| k == "useUndo") && v.get("useUndo").is_none_or(Value::is_boolean)
+            }
+            "PrepareRemainingPlan" => {
+                v.len() == 2 && valid_id("editId") && v.get("request").is_some_and(Value::is_object)
+            }
+            "ApplyRemainingPlan" => v.len() == 2 && valid_id("editId") && valid_id("preparedId"),
+            "CancelRemainingEdit" => v.len() == 1 && valid_id("editId"),
+            "TimedPause" => {
+                v.len() == 1
+                    && v.get("durationSeconds")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|n| [60, 300, 900].contains(&n))
+            }
+            "LeaveStop" => v.is_empty(),
+            _ => false,
+        };
+        if !valid {
+            return Err(NativeError::InvalidRequest);
+        }
+    }
+
+    if request.r#type == "UpdateVacation" {
+        let v = request
+            .payload
+            .as_object()
+            .ok_or(NativeError::InvalidRequest)?;
+        if v.is_empty()
+            || v.iter().any(|(key, value)| {
+                let (min, max) = match key.as_str() {
+                    "remainingFuelLiters" | "reserveLiters" => (0.0, 2000.0),
+                    "litersPer100Km" => (0.1, 200.0),
+                    _ => return true,
+                };
+                !value
+                    .as_f64()
+                    .is_some_and(|n| n.is_finite() && (min..=max).contains(&n))
+            })
+        {
+            return Err(NativeError::InvalidRequest);
+        }
+    }
     if request.r#type == "JumpToNextStop"
         && !request.payload.as_object().is_some_and(|v| v.is_empty())
     {
@@ -294,7 +378,7 @@ impl Connection {
             .sequence
             .checked_add(1)
             .ok_or(NativeError::Disconnected)?;
-        let frame = json!({"protocolMajor":1,"protocolMinor":5,"sessionId":self.session_id,"commandId":random_id(),"sequence":self.sequence,"expectedRevision":expected_revision.unwrap_or(self.revision),"type":kind,"payload":payload,"token":self.token});
+        let frame = json!({"protocolMajor":1,"protocolMinor":6,"sessionId":self.session_id,"commandId":random_id(),"sequence":self.sequence,"expectedRevision":expected_revision.unwrap_or(self.revision),"type":kind,"payload":payload,"token":self.token});
         write_frame(&mut self.stream, &frame)?;
         let result = read_frame(&mut self.stream)?;
         if !result.get("ok").is_some_and(Value::is_boolean) {
@@ -617,7 +701,7 @@ mod tests {
     use super::*;
 
     fn hello() -> Value {
-        json!({"ok":true,"payload":{"protocolMajor":1,"protocolMinor":5,"approvalPairing":true,"livePhoneLocation":true,"flightLegOptions":true,"liveJourneyControls":true,"routeStops":true,"motionTelemetry":true,"variableCruise":true,"mappedRoadLimits":true,"frameworkMock":true,"pairingRequired":true,"maxFrameBytes":1048576,"onlineRouteGeometry":true}})
+        json!({"ok":true,"payload":{"protocolMajor":1,"protocolMinor":6,"approvalPairing":true,"livePhoneLocation":true,"flightLegOptions":true,"liveJourneyControls":true,"routeStops":true,"motionTelemetry":true,"variableCruise":true,"mappedRoadLimits":true,"frameworkMock":true,"pairingRequired":true,"maxFrameBytes":1048576,"onlineRouteGeometry":true,"remainingJourneyEdits":true,"timedPause":true,"vacationFuelStops":true,"hotelStages":true,"vacationCorrections":true}})
     }
 
     #[test]
@@ -654,6 +738,43 @@ mod tests {
         ))
         .is_err());
     }
+    #[test]
+    fn remaining_edits_require_revision_and_narrow_payloads() {
+        let request = |kind: &str, payload: Value, revision| PhoneRequest {
+            r#type: kind.into(),
+            payload,
+            expected_revision: revision,
+        };
+        for (kind, payload) in [
+            ("BeginRemainingEdit", json!({"useUndo":true})),
+            (
+                "PrepareRemainingPlan",
+                json!({"editId":"edit","request":{"mode":"DRIVE"}}),
+            ),
+            (
+                "ApplyRemainingPlan",
+                json!({"editId":"edit","preparedId":"prepared"}),
+            ),
+            ("CancelRemainingEdit", json!({"editId":"edit"})),
+            ("TimedPause", json!({"durationSeconds":300})),
+            ("LeaveStop", json!({})),
+        ] {
+            assert!(validate_request(&request(kind, payload.clone(), Some(7))).is_ok());
+            assert!(validate_request(&request(kind, payload, None)).is_err());
+        }
+        for (kind, payload) in [
+            ("TimedPause", json!({"durationSeconds":2})),
+            (
+                "ApplyRemainingPlan",
+                json!({"editId":"edit","preparedId":"p","token":"forged"}),
+            ),
+            ("BeginRemainingEdit", json!({"useUndo":1})),
+            ("LeaveStop", json!({"skipFuel":true})),
+        ] {
+            assert!(validate_request(&request(kind, payload, Some(7))).is_err());
+        }
+    }
+
     #[test]
     fn variable_cruise_accepts_125_mph_and_rejects_invalid_controls() {
         let request = |payload| PhoneRequest {

@@ -10,6 +10,6 @@ export function decodeProgress(payload:Record<string,unknown>|undefined):LivePro
 }
 export function durationLabel(ms:number):string{const seconds=Math.ceil(ms/1000);if(seconds<60)return `${seconds} sec`;const minutes=Math.ceil(seconds/60);return minutes<60?`${minutes} min`:`${Math.floor(minutes/60)} hr ${minutes%60} min`;}
 export function etaLabel(progress:Pick<LiveProgress,'remainingMs'|'waitingFor'>,now=new Date()):string{
- if(progress.waitingFor){const labels:Record<string,string>={PAUSED:'Paused',PROVIDER_ACK:'Waiting for location',AIRPLANE_MODE:'Waiting for airplane mode',RESTORE_CONNECTIVITY:'Waiting for connectivity',STOP_DWELL:'Stopped briefly',SCHEDULING_GAP:'Playback interrupted · resume on phone'};return labels[progress.waitingFor]??'Waiting on phone';}
+ if(progress.waitingFor){const labels:Record<string,string>={PAUSED:'Paused',PROVIDER_ACK:'Waiting for location',AIRPLANE_MODE:'Waiting for airplane mode',RESTORE_CONNECTIVITY:'Waiting for connectivity',STOP_DWELL:'Stopped briefly',ARRIVING:'Confirming stop arrival',REFUELING:'Refueling',CHECK_IN:'Hotel check-in',HOTEL_STAY:'Hotel stay',CHECK_OUT:'Hotel checkout',SCHEDULING_GAP:'Playback interrupted · resume on phone'};return labels[progress.waitingFor]??'Waiting on phone';}
  if(progress.remainingMs===null)return 'ETA unavailable';if(progress.remainingMs===0)return 'Arrived';const arrival=new Date(now.getTime()+progress.remainingMs);return `${durationLabel(progress.remainingMs)} · arrives ${arrival.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`;
 }

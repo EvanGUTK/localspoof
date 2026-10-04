@@ -61,4 +61,24 @@ class MobilePresentationTest {
         assertEquals(230.0, mobileParseSpeed("230", MobileSpeedUnit.MPS, Mode.FLIGHT), 0.0)
     }
 
+
+    @Test fun vacationRequiresExplicitStartingFuelAndRangeConversionCannotInventCapacity() {
+        val base = MobileVacationDraft(enabled = true, tank = "16", consumption = "20", reserve = "1", starting = "")
+        assertTrue(runCatching { mobileVacationConfig(base) }.isFailure)
+        val percent = mobileVacationConfig(base.copy(starting = "50"))!!
+        assertEquals(8 * 3.785411784, percent.startingFuelLiters, 1e-8)
+        val range = mobileVacationConfig(base.copy(startingMethod = MobileFuelInput.RANGE, starting = "120"))!!
+        assertEquals(6 * 3.785411784, range.startingFuelLiters, 1e-6)
+        assertTrue(runCatching { mobileVacationConfig(base.copy(tank = "5", startingMethod = MobileFuelInput.RANGE, starting = "120")) }.isFailure)
+        assertTrue(runCatching { mobileVacationConfig(base.copy(starting = "101")) }.isFailure)
+        val metric = mobileVacationConfig(MobileVacationDraft(enabled = true, metric = true, tank = "60", consumption = "8", reserve = "5", startingMethod = MobileFuelInput.RANGE, starting = "200"))!!
+        assertEquals(16.0, metric.startingFuelLiters, 0.0)
+    }
+    @Test fun remainingCustomPlanUsesFreshConfirmedOriginAndKeepsStableStopIdentity() {
+        val stop = dev.localspoof.domain.RouteStop(dev.localspoof.domain.GeoPoint(1.05, 2.05), 1000, "Stop")
+        val draft = MobileDraft(mode = Mode.DRIVE, originLat = "1", originLon = "2", destinationLat = "1.1", destinationLon = "2.1", customPath = true, stops = listOf(stop))
+        val current = dev.localspoof.domain.GeoPoint(1.02, 2.02)
+        val request = mobilePlanRequest(draft, current)
+        assertEquals(current, request.origin); assertEquals(current, request.customPath!!.first()); assertEquals(stop.id, request.stops.single().id)
+    }
 }

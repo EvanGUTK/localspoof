@@ -19,6 +19,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalDensity
@@ -52,8 +54,12 @@ internal data class MobileDraft(
     val flightTransitMode: dev.localspoof.domain.FlightTransitMode = dev.localspoof.domain.FlightTransitMode.TIMED,
     val customPath: Boolean = false, val simulationOnly: Boolean = false,
     val preparedId: String? = null, val busy: Boolean = false,
+    val vacation: MobileVacationDraft = MobileVacationDraft(),
     val flightSpeedError: String? = null, val flightSpeedMps: Double = 230.0, val flightSpeedText: String = mobileFormatSpeed(230.0, MobileSpeedUnit.MPH), val stops: List<RouteStop> = emptyList()
 )
+internal data class MobileRemainingDraft(val choices: PlanRequest, val phase: FlightPhase?, val held: RemainingEditContext? = null) {
+    val confirmedOrigin: GeoPoint get() = held?.confirmedOrigin ?: choices.origin
+}
 internal data class MobileUiState(
     val phone: PhoneView,
     val section: MobileSection = MobileSection.MAP,
@@ -62,7 +68,9 @@ internal data class MobileUiState(
     val walkDefaultText: String = mobileFormatSpeed(1.4, MobileSpeedUnit.MPH),
     val driveDefaultText: String = mobileFormatSpeed(13.9, MobileSpeedUnit.MPH),
     val settingsError: String? = null,
-    val airports: List<Airport> = emptyList()
+    val airports: List<Airport> = emptyList(),
+    val remainingEdit: MobileRemainingDraft? = null,
+    val mapOverlay: MobileMapOverlayState? = null
 )
 internal sealed interface MobileUiEvent {
     data class Section(val section: MobileSection) : MobileUiEvent
@@ -83,7 +91,17 @@ internal sealed interface MobileUiEvent {
     data class DrivingMode(val mode: DrivingSpeedMode) : MobileUiEvent
     data class FollowRoadLimits(val enabled: Boolean) : MobileUiEvent
     data class SetLiveDrivingControls(val controls: DrivingSpeedControls) : MobileUiEvent
-    data class AddStop(val point: GeoPoint, val label: String, val dwellSeconds: Long) : MobileUiEvent
+    data class AddStop(val point: GeoPoint, val label: String, val dwellSeconds: Long, val next: Boolean = false) : MobileUiEvent
+    data class ReorderStop(val index: Int, val offset: Int) : MobileUiEvent
+    data class ConfigureStop(val index: Int, val stop: RouteStop) : MobileUiEvent
+    data class CorrectVacation(val fuelLiters: Double, val consumption: Double, val reserveLiters: Double) : MobileUiEvent
+    data class Vacation(val draft: MobileVacationDraft) : MobileUiEvent
+    data class BeginRemainingEdit(val useUndo: Boolean = false) : MobileUiEvent
+    data object CancelRemainingEdit : MobileUiEvent
+    data object ApplyRemainingEdit : MobileUiEvent
+    data class TimedPause(val seconds: Long) : MobileUiEvent
+    data object LeaveStop : MobileUiEvent
+    data object CancelTimedPause : MobileUiEvent
     data class RemoveStop(val index: Int) : MobileUiEvent
     data class StopDwell(val index: Int, val seconds: Long) : MobileUiEvent
     data class LoadSaved(val draft: MobileDraft) : MobileUiEvent
@@ -110,21 +128,32 @@ internal sealed interface MobileUiEvent {
 /** Presentation emits user actions only: it cannot arm providers, pair, or change radios. */
 @Composable internal fun MobileApp(state: MobileUiState, onEvent: (MobileUiEvent) -> Unit, modifier: Modifier = Modifier) {
     var bookmarks by remember { mutableStateOf(false) }
+    val defaultMapOverlay = remember { MobileMapOverlayState() }
+    val mapOverlay = state.mapOverlay ?: defaultMapOverlay
+    var hasShownMap by remember { mutableStateOf(state.section == MobileSection.MAP) }
     Surface(modifier.fillMaxSize().testTag("mobile-root"), color = Color(0xff0b1419)) {
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
             val layout = mobileLayoutPolicy(maxWidth.value.coerceAtMost(840f), maxHeight.value, LocalDensity.current.fontScale)
             Column(Modifier.align(Alignment.TopCenter).widthIn(max = 840.dp).fillMaxSize()) {
                 MobileNavigation(state.section, onEvent, { bookmarks = true })
-                if (state.section == MobileSection.MAP) {
-                    MapHome(state, layout, onEvent, Modifier.weight(1f).fillMaxWidth().testTag("mobile-content"))
-                } else key(state.section) {
-                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("mobile-content").padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        StatusCard(state, onEvent, layout.compactHeight)
-                        when (state.section) {
-                            MobileSection.CONNECT -> ConnectScreen(state, onEvent)
-                            MobileSection.JOURNEY -> JourneyScreen(state, layout, onEvent)
-                            MobileSection.SETTINGS -> { SettingsScreen(state, onEvent); ConnectScreen(state, onEvent) }
-                            MobileSection.MAP -> Unit
+                // Keep one renderer and camera in RAM when navigating. The covered map is
+                // hidden from touch/accessibility and paused; playback remains service-owned.
+                Box(Modifier.weight(1f).fillMaxWidth().testTag("mobile-content")) {
+                    val mapVisible = state.section == MobileSection.MAP
+                    val mapModifier = if (mapVisible) Modifier.fillMaxSize() else Modifier.fillMaxSize().graphicsLayer { alpha = 0f }.clearAndSetSemantics { }
+                    if (hasShownMap || mapVisible) MapHome(state, layout, onEvent, mapModifier, mapOverlay, visible = mapVisible)
+                    SideEffect { if (mapVisible) hasShownMap = true }
+                    if (!mapVisible) key(state.section) {
+                        Surface(Modifier.fillMaxSize(), color = Color(0xff0b1419)) {
+                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                StatusCard(state, onEvent, layout.compactHeight)
+                                when (state.section) {
+                                    MobileSection.CONNECT -> ConnectScreen(state, onEvent)
+                                    MobileSection.JOURNEY -> JourneyScreen(state, layout, onEvent)
+                                    MobileSection.SETTINGS -> { SettingsScreen(state, onEvent); ConnectScreen(state, onEvent) }
+                                    MobileSection.MAP -> Unit
+                                }
+                            }
                         }
                     }
                 }
@@ -189,17 +218,18 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     var placeRole by mutableStateOf("Destination")
     var follow by mutableStateOf(false)
     var fitRevision by mutableStateOf(0L)
+    var retryRevision by mutableStateOf(0L)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun MapHome(state: MobileUiState, layout: MobileLayoutPolicy, event: (MobileUiEvent) -> Unit, modifier: Modifier, overlay: MobileMapOverlayState = remember { MobileMapOverlayState() }) {
+@Composable internal fun MapHome(state: MobileUiState, layout: MobileLayoutPolicy, event: (MobileUiEvent) -> Unit, modifier: Modifier, overlay: MobileMapOverlayState = remember { MobileMapOverlayState() }, visible: Boolean = true) {
     var showResults by remember { mutableStateOf(false) }
     var showJourney by remember { mutableStateOf(false) }
     fun chooseOnMap(point: GeoPoint) {
         val label = overlay.nearby.firstOrNull { it.point.distanceTo(point) <= 0.01 }?.name ?: "Chosen on map"
         when (if (state.draft.mode == Mode.INSTANT) "Destination" else overlay.placeRole) {
             "Origin" -> event(MobileUiEvent.OriginSelected(point, label))
-            "Stop" -> event(MobileUiEvent.AddStop(point, label.take(120), 0))
+            "Stop", "Next stop" -> event(MobileUiEvent.AddStop(point, label.take(120), 0, next = overlay.placeRole == "Next stop"))
             else -> event(MobileUiEvent.PlaceSelected(point, label))
         }
         overlay.nearby = emptyList()
@@ -207,13 +237,14 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     val large = LocalDensity.current.fontScale >= 1.8f || layout.compactHeight
     if (large) Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.nearby = it }
-        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxWidth().height(160.dp).testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision) { chooseOnMap(it) }
+        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxWidth().height(160.dp).testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }) { chooseOnMap(it) }
         if (overlay.nearby.isNotEmpty()) NearbyResultsButton(overlay.nearby) { showResults = true }
         MapJourneyPanel(state, event, layout.compactHeight)
-        MobileMapKey(event, overlay.follow, { overlay.follow = it }, { overlay.follow = false; overlay.fitRevision++ })
+        MapCameraControls(overlay)
+        MobileMapKey(event, overlay.follow, { overlay.follow = it }, { overlay.follow = false; overlay.fitRevision++ }, retry = { overlay.retryRevision++ })
         Text("© OpenStreetMap contributors · OpenFreeMap", style = MaterialTheme.typography.labelSmall)
     } else Box(modifier) {
-        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxSize().testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision) { chooseOnMap(it) }
+        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxSize().testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }) { chooseOnMap(it) }
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().testTag("mobile-map-top-overlay").padding(horizontal = 12.dp)) {
             SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.nearby = it }
         }
@@ -222,8 +253,8 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (overlay.nearby.isNotEmpty()) {
                         NearbyResultsButton(overlay.nearby) { showResults = true }
-                        if (state.phone.snapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING)) CompactPlayback(state, event) { showJourney = true }
-                    } else CompactJourney(state, event) { showJourney = true }
+                        if (state.phone.snapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING)) CompactPlayback(state, event) { if (state.remainingEdit != null) event(MobileUiEvent.Section(MobileSection.JOURNEY)) else showJourney = true }
+                    } else CompactJourney(state, event) { if (state.remainingEdit != null) event(MobileUiEvent.Section(MobileSection.JOURNEY)) else showJourney = true }
                     if (state.phone.pairingPending || state.phone.message != null) {
                         TextButton(onClick = { if (state.phone.pairingPending) event(MobileUiEvent.Section(MobileSection.CONNECT)) else showJourney = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("compact-status-details")) {
                             Text(if (state.phone.pairingPending) "Computer waiting · Review" else "Attention needed · Details", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -233,19 +264,34 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
                 }
             }
         }
-        Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = if (state.phone.pairingPending || state.phone.message != null) 180.dp else if (overlay.nearby.isNotEmpty() && state.phone.snapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING)) 148.dp else if (overlay.nearby.isNotEmpty()) 96.dp else 136.dp)) { MobileMapKey(event, overlay.follow, { overlay.follow = it }, { overlay.follow = false; overlay.fitRevision++ }) }
+        Column(Modifier.align(Alignment.CenterEnd).padding(end = 12.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            MapCameraControls(overlay)
+            MobileMapKey(event, overlay.follow, { overlay.follow = it }, { overlay.follow = false; overlay.fitRevision++ }, retry = { overlay.retryRevision++ })
+        }
     }
-    if (showResults) ModalBottomSheet(onDismissRequest = { showResults = false }, modifier = Modifier.testTag("nearby-sheet")) {
+    if (visible && showResults) ModalBottomSheet(onDismissRequest = { showResults = false }, modifier = Modifier.testTag("nearby-sheet")) {
         ModalActions("nearby-sheet", event) { showResults = false }
         Text("Choose a ${if (state.draft.mode == Mode.INSTANT) "destination" else overlay.placeRole.lowercase()}", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium)
         NearbyResults(state, overlay.nearby, overlay.placeRole, event) { overlay.nearby = emptyList(); showResults = false }
     }
-    if (showJourney) ModalBottomSheet(onDismissRequest = { showJourney = false }, modifier = Modifier.testTag("journey-sheet")) {
+    if (visible && showJourney) ModalBottomSheet(onDismissRequest = { showJourney = false }, modifier = Modifier.testTag("journey-sheet")) {
         ModalActions("journey-sheet", event) { showJourney = false }
         Column(Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MapJourneyPanel(state, event, true)
             Text("Online map/search · OpenFreeMap / Photon · © OpenStreetMap", style = MaterialTheme.typography.labelSmall)
         }
+    }
+}
+
+/** Camera controls remain discoverable outside Map key and never mutate playback. */
+@Composable private fun MapCameraControls(overlay: MobileMapOverlayState) {
+    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FilterChip(selected = overlay.follow, onClick = { overlay.follow = !overlay.follow },
+            label = { Text(if (overlay.follow) "Following" else "Follow") },
+            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 80.dp).background(Color(0xee101b22), CircleShape)
+                .testTag("phone-follow").semantics { contentDescription = if (overlay.follow) "Following phone location. Tap to stop following." else "Follow phone location" })
+        TextButton(onClick = { overlay.follow = false; overlay.fitRevision++ },
+            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 80.dp).background(Color(0xee101b22), CircleShape).testTag("phone-fit-route")) { Text("Fit route") }
     }
 }
 
@@ -277,7 +323,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
             Text(mobileEtaLabel(state.phone.snapshot), modifier = Modifier.testTag("phone-eta"), maxLines = 1, style = MaterialTheme.typography.bodySmall)
         }
         if (state.phone.snapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING)) TextButton(onClick = { event(MobileUiEvent.PauseResume) }, modifier = Modifier.heightIn(min = 48.dp).testTag("phone-pause")) { Text(if (state.phone.snapshot.state == SessionState.PAUSED) "Resume" else "Pause") }
-        TextButton(onClick = details, modifier = Modifier.heightIn(min = 48.dp).testTag("journey-details")) { Text("Details") }
+        TextButton(onClick = details, modifier = Modifier.heightIn(min = 48.dp).testTag("journey-details")) { Text(if (state.remainingEdit != null) "Edit" else "Details") }
     }
 }
 @Composable private fun CompactJourney(state: MobileUiState, event: (MobileUiEvent) -> Unit, details: () -> Unit) {
@@ -285,27 +331,28 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         FilterChip(selected = state.draft.mode == Mode.INSTANT, onClick = { event(MobileUiEvent.SelectMode(Mode.INSTANT)) }, label = { Text("Teleport") }, modifier = Modifier.heightIn(min = 48.dp).testTag("mobile-teleport"))
         FilterChip(selected = state.draft.mode != Mode.INSTANT, onClick = { if (state.draft.mode == Mode.INSTANT) event(MobileUiEvent.SelectMode(Mode.DRIVE)) }, label = { Text("Route") }, modifier = Modifier.heightIn(min = 48.dp).testTag("mobile-route"))
-        if (state.draft.mode == Mode.INSTANT) Button(onClick = { event(MobileUiEvent.Preview) }, enabled = !state.draft.busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("map-preview")) { Text("Preview", maxLines = 1) }
+        if (state.phone.snapshot.activePreview == null && state.draft.mode == Mode.INSTANT) Button(onClick = { event(MobileUiEvent.Preview) }, enabled = !state.draft.busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("map-preview")) { Text("Preview", maxLines = 1) }
         else TextButton(onClick = details, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("journey-details")) { Text("Options", maxLines = 1) }
     }
-    Text(state.draft.destinationLabel.ifBlank { if (state.draft.destinationLat.isNotBlank()) "Selected location" else "Search for a place or tap the map" }, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+    Text(if (state.remainingEdit != null) "Editing remaining journey · approved route stays live" else if (state.phone.snapshot.activePreview != null) "${state.phone.snapshot.mode?.name?.lowercase()?.replaceFirstChar { it.uppercase() }} journey · Phone owns playback" else state.draft.destinationLabel.ifBlank { if (state.draft.destinationLat.isNotBlank()) "Selected location" else "Search for a place or tap the map" }, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun MapJourneyPanel(state: MobileUiState, event: (MobileUiEvent) -> Unit, compact: Boolean) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (state.phone.snapshot.activePreview == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(selected = state.draft.mode == Mode.INSTANT, onClick = { event(MobileUiEvent.SelectMode(Mode.INSTANT)) }, label = { Text("Teleport") }, modifier = Modifier.heightIn(min = 48.dp).testTag("mobile-teleport"))
         FilterChip(selected = state.draft.mode != Mode.INSTANT, onClick = { if (state.draft.mode == Mode.INSTANT) event(MobileUiEvent.SelectMode(Mode.DRIVE)) }, label = { Text("Route") }, modifier = Modifier.heightIn(min = 48.dp).testTag("mobile-route"))
     }
-    if (state.draft.mode != Mode.INSTANT) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(Mode.WALK, Mode.DRIVE, Mode.FLIGHT).forEach { mode ->
+    if (state.phone.snapshot.activePreview == null && state.draft.mode != Mode.INSTANT) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(Mode.WALK, Mode.DRIVE, Mode.FLIGHT).forEach { mode ->
         FilterChip(selected = state.draft.mode == mode, onClick = { event(MobileUiEvent.SelectMode(mode)) }, label = { Text(if (mode == Mode.FLIGHT) "Fly" else mode.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp))
     } }
-    val preview = state.phone.preview ?: state.phone.snapshot.preparedPreview
+    val preview = state.phone.snapshot.activePreview ?: state.phone.preview ?: state.phone.snapshot.preparedPreview
     Text(preview?.let { "${mobileDistanceLabel(it.distanceMeters, state.preferences.distanceUnit)} · ${max(1L, (it.durationMs + 59999) / 60000)} min preview" }
         ?: if (state.draft.destinationLat.isNotBlank()) state.draft.destinationLabel.ifBlank { "Selected place · ready to preview" } else "Search for a place or tap the map", style = MaterialTheme.typography.titleMedium)
     state.phone.phoneLocation?.let { Text("${if (it.source.name == "DEVICE") "Device location" else "Simulated location"} · ${it.ageMs / 1000} s old", style = MaterialTheme.typography.bodySmall) }
     state.draft.destinationLabel.takeIf { it.isNotBlank() && preview != null }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
     PlaybackProgress(state, event)
+    RemainingJourneyActions(state, event)
     if (state.phone.pairingPending) { Text("Computer waiting for approval"); Action("Compare and approve", "open-pairing") { event(MobileUiEvent.Section(MobileSection.CONNECT)) } }
     state.phone.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     if (compact) StartAction(state, event, status = true)
@@ -402,7 +449,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     fun choose(point: GeoPoint, name: String) {
         when (if (state.draft.mode == Mode.INSTANT) "Destination" else role) {
             "Origin" -> event(MobileUiEvent.OriginSelected(point, name))
-            "Stop" -> event(MobileUiEvent.AddStop(point, name.take(120), 0))
+            "Stop", "Next stop" -> event(MobileUiEvent.AddStop(point, name.take(120), 0, next = role == "Next stop"))
             else -> event(MobileUiEvent.PlaceSelected(point, name))
         }
         cancel(); category = null
@@ -442,7 +489,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
                 Box { TextButton(onClick = { more = true }, modifier = Modifier.heightIn(min = 48.dp).testTag("category-more")) { Text("More") }
                     DropdownMenu(more, { more = false }) {
                         if (category != null) DropdownMenuItem(text = { Text("Clear places") }, onClick = { cancel(); category = null; more = false }, modifier = Modifier.heightIn(min = 48.dp).testTag("clear-places"))
-                        if (state.draft.mode != Mode.INSTANT) listOf("Origin", "Destination", "Stop").forEach { choice -> DropdownMenuItem(text = { Text("Use place as $choice") }, onClick = { cancel(); setRole(choice); more = false }, modifier = Modifier.heightIn(min = 48.dp)) }
+                        if (state.draft.mode != Mode.INSTANT) (if (state.draft.mode == Mode.FLIGHT) listOf("Origin", "Destination") else if (state.remainingEdit != null) listOf("Destination", "Next stop", "Stop") else listOf("Origin", "Destination", "Stop")).forEach { choice -> DropdownMenuItem(text = { Text("Use place as $choice") }, onClick = { cancel(); setRole(choice); more = false }, modifier = Modifier.heightIn(min = 48.dp)) }
                         PlaceCategory.entries.drop(4).forEach { choice -> DropdownMenuItem(text = { Text(choice.label) }, onClick = { more = false; search(choice) }, modifier = Modifier.heightIn(min = 48.dp).testTag("category-${choice.name.lowercase()}")) } }
                 }
             }
@@ -459,7 +506,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
         nearby.forEachIndexed { index, place -> Action("${index + 1}. ${place.name} · ${mobileDistanceLabel(place.distanceMeters, state.preferences.distanceUnit)}", "nearby-result-$index") {
             when (if (state.draft.mode == Mode.INSTANT) "Destination" else role) {
                 "Origin" -> event(MobileUiEvent.OriginSelected(place.point, place.name))
-                "Stop" -> event(MobileUiEvent.AddStop(place.point, place.name.take(120), 0))
+                "Stop", "Next stop" -> event(MobileUiEvent.AddStop(place.point, place.name.take(120), 0, next = role == "Next stop"))
                 else -> event(MobileUiEvent.PlaceSelected(place.point, place.name))
             }
             clear()
@@ -468,7 +515,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable private fun MobileMapKey(event: (MobileUiEvent) -> Unit, follow: Boolean = false, setFollow: (Boolean) -> Unit = {}, fit: () -> Unit = {}) {
+@Composable private fun MobileMapKey(event: (MobileUiEvent) -> Unit, follow: Boolean = false, setFollow: (Boolean) -> Unit = {}, fit: () -> Unit = {}, retry: () -> Unit = {}) {
     var expanded by remember { mutableStateOf(false) }
     TextButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp).background(Color(0xee101b22), CircleShape).testTag("map-key-toggle")) { Text("Map key") }
     if (expanded) AlertDialog(onDismissRequest = { expanded = false }, modifier = Modifier.testTag("map-key-dialog"), title = { Text("Map key") }, text = {
@@ -480,6 +527,8 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
             }
             Toggle(follow, "Follow current phone location") { setFollow(it) }
             Action("Fit route", "map-fit-route") { fit(); expanded = false }
+            Action("Reload map", "phone-map-retry") { retry(); expanded = false }
+            Text("Gold route/pin: candidate only. The approved route changes after successful Apply.", style = MaterialTheme.typography.bodySmall)
             Text("Gray phone dot: stale, waiting or paused simulation; it does not predict movement.", style = MaterialTheme.typography.bodySmall)
             Text("Places are within 10 km of the searched map center. Pan, then tap Search this area to refresh. Choosing a place stages your plan; press Preview and Start explicitly.", style = MaterialTheme.typography.bodySmall)
             Text("Online map/search · OpenFreeMap / Photon · © OpenStreetMap", style = MaterialTheme.typography.labelSmall)
@@ -518,10 +567,10 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     }, confirmButton = { TextButton(onClick = dismiss) { Text("Done") } })
 }
 internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
-    val preview = state.phone.preview ?: state.phone.snapshot.preparedPreview
+    val preview = state.phone.snapshot.activePreview ?: state.phone.preview ?: state.phone.snapshot.preparedPreview
     if (state.draft.destinationLat.isNotBlank() || preview == null) return state.draft
     return state.draft.copy(drivingSpeedMode = state.phone.snapshot.speedControls.mode, driveMinMps = state.phone.snapshot.speedControls.driveMinMps, driveMaxMps = state.phone.snapshot.speedControls.driveMaxMps, followRoadLimits = state.phone.snapshot.speedControls.followRoadLimits, mode = preview.mode, originLat = preview.origin.lat.toString(), originLon = preview.origin.lon.toString(), destinationLat = preview.destination.lat.toString(), destinationLon = preview.destination.lon.toString(), speedMps = if (preview.mode == Mode.WALK) state.phone.snapshot.speeds.walkMps else state.phone.snapshot.speeds.driveMps, flightSpeedMps = state.phone.snapshot.speeds.flightMps,
-        departureId = preview.originAirport?.id ?: "", arrivalId = preview.destinationAirport?.id ?: "", departureGroundMode = preview.departureGroundMode ?: GroundLegMode.DRIVE, arrivalGroundMode = preview.arrivalGroundMode ?: GroundLegMode.DRIVE, flightTransitMode = preview.flightTransitMode ?: FlightTransitMode.TIMED, simulationOnly = preview.simulationOnly, customPath = preview.customPath, stops = preview.stops)
+        departureId = preview.originAirport?.id ?: "", arrivalId = preview.destinationAirport?.id ?: "", departureGroundMode = preview.departureGroundMode ?: GroundLegMode.DRIVE, arrivalGroundMode = preview.arrivalGroundMode ?: GroundLegMode.DRIVE, flightTransitMode = preview.flightTransitMode ?: FlightTransitMode.TIMED, simulationOnly = preview.simulationOnly, customPath = preview.customPath, stops = preview.stops, vacation = state.phone.snapshot.activeChoices?.vacation?.let(::mobileVacationDraft) ?: state.draft.vacation)
 }
 
 @Composable private fun Panel(title: String, content: @Composable ColumnScope.() -> Unit) {
@@ -596,18 +645,20 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun JourneyScreen(state: MobileUiState, layout: MobileLayoutPolicy, event: (MobileUiEvent) -> Unit) {
     val d = state.draft
-    val preview = if (d.preparedId != null) state.phone.preview else state.phone.snapshot.preparedPreview.takeIf { state.phone.snapshot.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING) }
-    Panel("Journey") {
+    val preview = if (d.preparedId != null) state.phone.preview else (state.phone.snapshot.activePreview ?: state.phone.snapshot.preparedPreview).takeIf { state.phone.snapshot.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING) }
+    RemainingJourneyActions(state, event)
+    Panel(if (state.remainingEdit != null) "Edit remaining journey" else "Journey") {
         Text("Worldwide online routes are built in Windows. Search and preview on the map here; teleport, custom paths and imported offline road routes can be prepared on this phone.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Mode.entries.forEach { mode -> FilterChip(selected = mode == d.mode, onClick = { event(MobileUiEvent.SelectMode(mode)) }, label = { Text(if (mode == Mode.FLIGHT) "Airport journey" else mode.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp)) }
+            Mode.entries.filter { mode -> state.remainingEdit?.let { edit -> if (edit.choices.mode == Mode.FLIGHT) mode == Mode.FLIGHT else mode in setOf(Mode.WALK, Mode.DRIVE) && (edit.choices.vacation == null || mode == Mode.DRIVE) } ?: true }.forEach { mode -> FilterChip(selected = mode == d.mode, onClick = { event(MobileUiEvent.SelectMode(mode)) }, label = { Text(if (mode == Mode.FLIGHT) "Airport journey" else mode.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp)) }
         }
         if (d.mode != Mode.INSTANT) {
             Text("Origin", style = MaterialTheme.typography.titleMedium)
-            Coordinates(d.originLat, d.originLon, "origin", layout.twoColumnFields, event)
+            if (state.remainingEdit == null) Coordinates(d.originLat, d.originLon, "origin", layout.twoColumnFields, event)
+            else Text("Starts at the confirmed phone position. Completed travel stays completed.")
             state.phone.phoneLocation?.let { location ->
                 Text("${if (location.source.name == "DEVICE") "Device location" else "Simulated location"} · ${location.ageMs / 1000} s old")
-                Action("Use phone location as origin", "use-phone-origin", enabled = location.ageMs <= 30_000) { event(MobileUiEvent.CurrentOrigin) }
+                if (state.remainingEdit == null) Action("Use phone location as origin", "use-phone-origin", enabled = location.ageMs <= 30_000) { event(MobileUiEvent.CurrentOrigin) }
             }
         }
         Text(if (d.mode == Mode.INSTANT) "Location to hold" else "Destination", style = MaterialTheme.typography.titleMedium)
@@ -624,10 +675,12 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
             d.speedError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             d.flightSpeedError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             DraftDrivingOptions(state, event)
+            if (state.remainingEdit == null || state.remainingEdit.phase == FlightPhase.ORIGIN_GROUND) {
             PrivateInput(d.boardingHoldSeconds, "Boarding hold (seconds, 0–3,600)", "boarding-hold", numeric = true) { event(MobileUiEvent.Edit(MobileField.BOARDING_HOLD, it)) }
             if (!mobileBoardingValid(d)) Text("Enter a boarding hold from 0 to 3,600 seconds.", color = MaterialTheme.colorScheme.error)
             Text("To departure airport", style = MaterialTheme.typography.titleMedium)
             FlightGroundChoices(d.departureGroundMode, "departure") { event(MobileUiEvent.DepartureGroundMode(it)) }
+            }
             Text("Airport to airport", style = MaterialTheme.typography.titleMedium)
             dev.localspoof.domain.FlightTransitMode.entries.forEach { transit ->
                 val tag = if (transit == dev.localspoof.domain.FlightTransitMode.JUMP) "flight-jump" else "flight-timed"
@@ -638,23 +691,22 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
             if (d.flightTransitMode == dev.localspoof.domain.FlightTransitMode.TIMED) PrivateInput(d.flightSpeedText, "Plane speed (${state.preferences.speedUnit.label})", "flight-speed", numeric = true) { event(MobileUiEvent.Edit(MobileField.FLIGHT_SPEED, it)) }
             Text("To destination", style = MaterialTheme.typography.titleMedium)
             FlightGroundChoices(d.arrivalGroundMode, "arrival") { event(MobileUiEvent.ArrivalGroundMode(it)) }
-            PrivateInput(d.departureId, "Departure airport ID (blank chooses nearest suitable)", "departure-airport") { event(MobileUiEvent.Edit(MobileField.DEPARTURE, it)) }
-            PrivateInput(d.arrivalId, "Arrival airport ID (blank chooses nearest suitable)", "arrival-airport") { event(MobileUiEvent.Edit(MobileField.ARRIVAL, it)) }
+            if (state.remainingEdit == null || state.remainingEdit.phase == FlightPhase.ORIGIN_GROUND) PrivateInput(d.departureId, "Departure airport ID (blank chooses nearest suitable)", "departure-airport") { event(MobileUiEvent.Edit(MobileField.DEPARTURE, it)) }
+            if (state.remainingEdit == null || state.remainingEdit.phase in setOf(FlightPhase.ORIGIN_GROUND, FlightPhase.BOARDING, FlightPhase.AWAIT_AIRPLANE_MODE, FlightPhase.FLIGHT_INTERVAL)) PrivateInput(d.arrivalId, "Arrival airport ID (blank chooses nearest suitable)", "arrival-airport") { event(MobileUiEvent.Edit(MobileField.ARRIVAL, it)) }
             PrivateInput(d.airportQuery, "Find airport name or ID", "airport-search") { event(MobileUiEvent.Edit(MobileField.AIRPORT_QUERY, it)) }
             if (d.airportQuery.isNotBlank()) state.airports.filter { it.type == "large_airport" && it.scheduledService && !it.closed && (it.name.contains(d.airportQuery, true) || it.id.contains(d.airportQuery, true)) }.take(8).forEach { airport ->
                 Text("${airport.id} · ${airport.name}")
-                Action("Use as departure") { event(MobileUiEvent.AirportSelected(airport.id, true)) }
-                Action("Use as arrival") { event(MobileUiEvent.AirportSelected(airport.id, false)) }
+                if (state.remainingEdit == null || state.remainingEdit.phase == FlightPhase.ORIGIN_GROUND) Action("Use as departure") { event(MobileUiEvent.AirportSelected(airport.id, true)) }
+                if (state.remainingEdit == null || state.remainingEdit.phase in setOf(FlightPhase.ORIGIN_GROUND, FlightPhase.BOARDING, FlightPhase.AWAIT_AIRPLANE_MODE, FlightPhase.FLIGHT_INTERVAL)) Action("Use as arrival") { event(MobileUiEvent.AirportSelected(airport.id, false)) }
             }
-            Toggle(d.simulationOnly, "Simulation only; keep radio settings unchanged") { event(MobileUiEvent.SimulationOnly(it)) }
+            if (state.remainingEdit == null) Toggle(d.simulationOnly, "Simulation only; keep radio settings unchanged") { event(MobileUiEvent.SimulationOnly(it)) }
             Text("Driving legs require offline road coverage when planning here. Instant legs place you directly at their endpoint. Skipping the flight wait keeps the radio and confirmed placement steps. Guided mode pauses for your airplane-mode changes. No app compatibility guarantee.")
         }
+        if (d.mode == Mode.DRIVE && state.remainingEdit == null) VacationOptions(state, event)
         d.stops.forEachIndexed { index, stop ->
-            Text("${index + 1}. ${stop.label} · ${stop.dwellMs / 1000} s stop")
-            PrivateInput((stop.dwellMs / 1000).toString(), "Stop duration (seconds)", "stop-dwell-$index", numeric = true) { value -> value.toLongOrNull()?.takeIf { it in 0..3600 }?.let { event(MobileUiEvent.StopDwell(index, it)) } }
-            Action("Remove stop ${index + 1}") { event(MobileUiEvent.RemoveStop(index)) }
+            StopOptions(index, stop, state, event)
         }
-        Button(enabled = !d.busy && d.speedError == null && d.flightSpeedError == null && mobileBoardingValid(d) && mobileDrivingValid(d), onClick = { event(MobileUiEvent.Preview) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("mobile-preview")) { Text(if (d.busy) "Preparing…" else "Preview plan", softWrap = true) }
+        Button(enabled = !d.busy && d.speedError == null && d.flightSpeedError == null && mobileBoardingValid(d) && mobileDrivingValid(d), onClick = { event(MobileUiEvent.Preview) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("mobile-preview")) { Text(if (d.busy) "Preparing…" else if (state.remainingEdit != null) "Preview remaining journey" else "Preview plan", softWrap = true) }
     }
     Panel("Offline map") {
         Action("Import offline GeoPack", "import-pack") { event(MobileUiEvent.ImportPack) }
@@ -664,7 +716,7 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
         PrivateInput(d.placeQuery, "Search imported place names", "place-search") { event(MobileUiEvent.Edit(MobileField.PLACE_QUERY, it)) }
         if (d.placeQuery.isNotBlank()) state.phone.pack?.places?.filter { it.name.contains(d.placeQuery, true) }?.take(8)?.forEach { place -> Action(place.name) { event(MobileUiEvent.PlaceSelected(place.point)) } }
     }
-    preview?.let { preview -> Panel("Plan preview") {
+    preview?.let { preview -> Panel(if (state.remainingEdit != null) "Candidate preview · not applied" else "Plan preview") {
         Text("${mobileDistanceLabel(preview.distanceMeters, state.preferences.distanceUnit)} · ${max(1L, (preview.durationMs + 59_999) / 60_000)} min" + if (preview.customPath) " · custom path" else "")
         if (preview.routeSource == RouteSource.ONLINE_ROUTER) Text("Online route from Windows · ${preview.routeProvider ?: "external router"}. Playback uses validated, snapped route endpoints.")
         if (preview.distanceMeters > 402336 && preview.mode != Mode.FLIGHT) Text("Over 250 miles. Airport journey offers a staged itinerary with ground route coverage.")
@@ -803,4 +855,146 @@ private class PrivateEditText(context: android.content.Context) : EditText(conte
         }
         point?.let { drawCircle(Color.White, 9f, project(it)); drawCircle(Color(0xff4b73ed), 7f, project(it)) }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun RemainingJourneyActions(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    val snapshot = state.phone.snapshot
+    if (snapshot.activePreview == null) return
+    Panel(if (state.remainingEdit != null) "Remaining journey edit" else "Journey controls") {
+        if (state.phone.desktopEnabled && !state.phone.controllerApproved && snapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING)) Text("Phone playback continues. Reconnect and approve Windows to restore desktop control.")
+        if (state.remainingEdit == null && snapshot.editId != null) Text("Windows is editing this journey. The approved route remains visible.")
+        if (snapshot.timedPauseRemainingMs != null || state.remainingEdit != null || snapshot.editId != null) {
+            Text("Holding playback to apply or undo an edit cancels the timed-resume countdown. A journey that was paused stays paused until you tap Resume.", modifier = Modifier.testTag("remaining-timed-pause-notice"), style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.remainingEdit != null) {
+            Text(if (state.remainingEdit.held != null) "Playback is held for this edit. Cancel retains the approved journey." else "Playback continues while you preview. Apply rebuilds from the latest confirmed phone position.")
+            Action("Return to map to choose a destination or next stop", "remaining-map") { event(MobileUiEvent.Section(MobileSection.MAP)) }
+            Action("Apply remaining journey", "remaining-apply", enabled = state.draft.preparedId != null && !state.draft.busy) { event(MobileUiEvent.ApplyRemainingEdit) }
+            Action("Cancel edit · keep approved journey", "remaining-cancel") { event(MobileUiEvent.CancelRemainingEdit) }
+        } else {
+            Action("Change destination, stops or upcoming airport", "remaining-edit", enabled = snapshot.waitingFor !in setOf("AIRPLANE_MODE", "RESTORE_CONNECTIVITY", "PROVIDER_ACK", "ARRIVING") && snapshot.editId == null) { event(MobileUiEvent.BeginRemainingEdit()) }
+            Action("Undo last journey edit from here", "remaining-undo", enabled = snapshot.canUndo && snapshot.waitingFor !in setOf("AIRPLANE_MODE", "RESTORE_CONNECTIVITY", "PROVIDER_ACK", "ARRIVING") && snapshot.editId == null) { event(MobileUiEvent.BeginRemainingEdit(true)) }
+            var pauseOptions by remember { mutableStateOf(false) }
+            Action(if (pauseOptions) "Hide timed stops" else "Pause here for…", "timed-pause-options", enabled = snapshot.state == SessionState.ACTIVE && snapshot.waitingFor == null) { pauseOptions = !pauseOptions }
+            if (pauseOptions) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(60L, 300L, 900L).forEach { seconds -> TextButton(onClick = { event(MobileUiEvent.TimedPause(seconds)); pauseOptions = false }, modifier = Modifier.heightIn(min = 48.dp).testTag("timed-pause-$seconds")) { Text("${seconds / 60} min") } }
+            }
+            snapshot.timedPauseRemainingMs?.let { Text("Timed pause · ${(it + 999) / 1000} seconds remaining. Resume cancels the timer.", modifier = Modifier.testTag("timed-pause-countdown")); Action("Cancel timer · stay paused", "timed-pause-cancel") { event(MobileUiEvent.CancelTimedPause) } }
+            if (snapshot.waitingFor in setOf("CHECK_IN", "HOTEL_STAY")) {
+                Action("Leave hotel now", "hotel-leave-now") { event(MobileUiEvent.LeaveStop) }
+            }
+        }
+        snapshot.stages.forEach { stage ->
+            Text("${stage.label} · ${stage.status.lowercase().replace('_', ' ')}${stage.remainingMs?.let { " · ${(it + 59999) / 60000} min" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+        }
+        snapshot.vacation?.let { budget ->
+            Text("Estimated fuel ${String.format(java.util.Locale.ROOT, "%.1f", budget.remainingFuelLiters)} L · ${String.format(java.util.Locale.ROOT, "%.1f", budget.effectiveMpg)} US MPG")
+            Text("Reserve-aware range ${mobileDistanceLabel(budget.estimatedRemainingRangeMeters, state.preferences.distanceUnit)}")
+            fun price(value: Double?) = value?.let { "${budget.currency} ${String.format(java.util.Locale.ROOT, "%.2f", it)}" } ?: "Unknown / partial"
+            Text("Fuel consumed value ${price(budget.consumedFuelValue)} · Refills paid ${price(budget.refillCash)}")
+            Text("Hotels incurred ${price(budget.hotelCost)} · Constant consumption estimate. Unknown fees/prices remain partial.")
+            ActiveVacationCorrection(state, event)
+        }
+        val phase = snapshot.phase?.name?.lowercase()?.replace('_', ' ') ?: snapshot.mode?.name?.lowercase() ?: "Journey"
+        Text("${phase.replaceFirstChar { it.uppercase() }} · ${mobileEtaLabel(snapshot)}", modifier = Modifier.testTag("phone-stage-strip"), style = MaterialTheme.typography.bodySmall)
+        Text("Worldwide rerouting is available in Windows. Phone edits require imported road coverage or an explicitly selected custom path.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun VacationOptions(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    val v = state.draft.vacation
+    FilterChip(selected = v.enabled, onClick = { event(MobileUiEvent.Vacation(v.copy(enabled = !v.enabled))) }, label = { Text("Vacation") }, modifier = Modifier.heightIn(min = 48.dp).testTag("vacation-toggle"))
+    if (!v.enabled) return
+    Text("Vehicle and estimated fuel · gas/diesel", style = MaterialTheme.typography.titleMedium)
+    Text("Select a catalog vehicle in Windows or enter your own specifications here. Missing tank sizes are never guessed. These are trip estimates, not vehicle telemetry.", style = MaterialTheme.typography.bodySmall)
+    PrivateInput(v.vehicle, "Vehicle description", "vacation-vehicle") { event(MobileUiEvent.Vacation(v.copy(vehicle = it))) }
+    Toggle(v.metric, "Use litres, km and L/100 km") { event(MobileUiEvent.Vacation(v.copy(metric = it, tank = "", consumption = "", starting = "", reserve = "", price = ""))) }
+    PrivateInput(v.tank, if (v.metric) "Tank capacity (litres)" else "Tank capacity (US gallons)", "vacation-tank", numeric = true) { event(MobileUiEvent.Vacation(v.copy(tank = it))) }
+    PrivateInput(v.consumption, if (v.metric) "Estimated consumption (L/100 km)" else "Estimated efficiency (US MPG)", "vacation-consumption", numeric = true) { event(MobileUiEvent.Vacation(v.copy(consumption = it))) }
+    Text("Starting fuel · required", style = MaterialTheme.typography.titleMedium)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { MobileFuelInput.entries.forEach { method ->
+        FilterChip(selected = v.startingMethod == method, onClick = { event(MobileUiEvent.Vacation(v.copy(startingMethod = method, starting = ""))) }, label = { Text(when (method) { MobileFuelInput.PERCENT -> "% tank"; MobileFuelInput.AMOUNT -> "Amount"; MobileFuelInput.RANGE -> "Range" }) }, modifier = Modifier.heightIn(min = 48.dp))
+    } }
+    PrivateInput(v.starting, when (v.startingMethod) { MobileFuelInput.PERCENT -> "Starting tank level (%)"; MobileFuelInput.AMOUNT -> if (v.metric) "Starting fuel (litres)" else "Starting fuel (US gallons)"; MobileFuelInput.RANGE -> if (v.metric) "Starting remaining range (km)" else "Starting remaining range (miles)" }, "vacation-starting", numeric = true) { event(MobileUiEvent.Vacation(v.copy(starting = it))) }
+    if (v.startingMethod == MobileFuelInput.RANGE) Text("Range converts once to estimated fuel using your consumption input. Changing live speed does not refill the tank.", style = MaterialTheme.typography.bodySmall)
+    PrivateInput(v.reserve, if (v.metric) "Keep reserve (litres)" else "Keep reserve (US gallons)", "vacation-reserve", numeric = true) { event(MobileUiEvent.Vacation(v.copy(reserve = it))) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { FuelGrade.entries.forEach { grade -> FilterChip(selected = v.grade == grade, onClick = { event(MobileUiEvent.Vacation(v.copy(grade = grade))) }, label = { Text(grade.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp)) } }
+    PrivateInput(v.currency, "Currency code", "vacation-currency") { event(MobileUiEvent.Vacation(v.copy(currency = it))) }
+    PrivateInput(v.price, if (v.metric) "Fuel price per litre (optional estimate)" else "Fuel price per US gallon (optional estimate)", "vacation-price", numeric = true) { event(MobileUiEvent.Vacation(v.copy(price = it))) }
+    PrivateInput(v.hotelNightly, "Default hotel price per night (optional estimate)", "vacation-hotel-price", numeric = true) { event(MobileUiEvent.Vacation(v.copy(hotelNightly = it))) }
+    PrivateInput(v.hotelNights, "Default hotel nights (explicit; independent of stop duration)", "vacation-hotel-nights", numeric = true) { event(MobileUiEvent.Vacation(v.copy(hotelNights = it))) }
+    val parsed = runCatching { mobileVacationConfig(v) }
+    if (parsed.isFailure) Text("Enter capacity, efficiency, starting fuel and reserve within capacity; prices must be nonnegative and currency a valid code.", color = MaterialTheme.colorScheme.error)
+    Text("Automatic reachable fuel-stop planning runs in Windows. On the phone add verified stations as fuel stops in the road route. Constant consumption is an editable estimate; no high-speed efficiency curve or live pump/hotel prices are claimed.", style = MaterialTheme.typography.bodySmall)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun StopOptions(index: Int, stop: RouteStop, state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    Text("${index + 1}. ${stop.label} · ${stop.kind.name.lowercase()}", style = MaterialTheme.typography.titleMedium)
+    var editPlace by remember(stop.id) { mutableStateOf(false) }
+    TextButton(onClick = { editPlace = !editPlace }, modifier = Modifier.heightIn(min = 48.dp).testTag("stop-$index-edit-place")) { Text(if (editPlace) "Close stop location" else "Change stop location / name") }
+    if (editPlace) {
+        var latitude by remember(stop.id) { mutableStateOf(stop.point.lat.toString()) }
+        var longitude by remember(stop.id) { mutableStateOf(stop.point.lon.toString()) }
+        var label by remember(stop.id) { mutableStateOf(stop.label) }
+        PrivateInput(latitude, "Stop latitude", "stop-$index-lat", numeric = true) { latitude = it }
+        PrivateInput(longitude, "Stop longitude", "stop-$index-lon", numeric = true) { longitude = it }
+        PrivateInput(label, "Stop name", "stop-$index-name") { label = it }
+        val point = runCatching { GeoPoint(latitude.toDouble(), longitude.toDouble()) }.getOrNull()
+        Action("Use updated stop", "stop-$index-apply-place", enabled = point != null && label.isNotBlank() && label.length <= 120 && label.none { it.isISOControl() }) {
+            event(MobileUiEvent.ConfigureStop(index, stop.copy(point = requireNotNull(point), label = label))); editPlace = false
+        }
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        StopKind.entries.forEach { kind -> FilterChip(selected = stop.kind == kind, enabled = kind != StopKind.FUEL || runCatching { mobileVacationConfig(state.draft.vacation) }.getOrNull() != null, onClick = {
+            val updated = when (kind) {
+                StopKind.PLACE -> stop.copy(kind = kind, fuel = null, hotel = null, dwellMs = 0)
+                StopKind.FUEL -> stop.copy(kind = kind, fuel = FuelStop(refillTargetLiters = requireNotNull(mobileVacationConfig(state.draft.vacation)).tankLiters), hotel = null, dwellMs = 300000)
+                StopKind.HOTEL -> stop.copy(kind = kind, fuel = null, hotel = HotelStop(checkInMs = 900000, stayMs = 28800000, checkOutMs = 600000,
+                    nights = state.draft.vacation.hotelNights.toIntOrNull()?.coerceIn(0, 365) ?: 0, nightlyPrice = state.draft.vacation.hotelNightly.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1_000_000.0 }, currency = state.draft.vacation.currency.takeIf { it.matches(Regex("[A-Z]{3}")) } ?: "USD"), dwellMs = 30300000)
+            }; event(MobileUiEvent.ConfigureStop(index, updated))
+        }, label = { Text(kind.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp)) }
+    }
+    if (stop.kind == StopKind.HOTEL) stop.hotel?.let { hotel ->
+        fun change(updated: HotelStop) = event(MobileUiEvent.ConfigureStop(index, stop.copy(hotel = updated, dwellMs = updated.checkInMs + updated.stayMs + updated.checkOutMs)))
+        PrivateInput(hotel.fees?.toString() ?: "", "Hotel fees (${hotel.currency}; optional estimate)", "hotel-$index-fees", numeric = true) { text -> if (text.isBlank()) change(hotel.copy(fees = null)) else text.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1_000_000.0 }?.let { fees -> change(hotel.copy(fees = fees)) } }
+        listOf("Check-in minutes" to hotel.checkInMs, "Stay minutes" to hotel.stayMs, "Checkout minutes" to hotel.checkOutMs).forEachIndexed { stage, (label, ms) ->
+            PrivateInput((ms / 60000).toString(), label, "hotel-$index-stage-$stage", numeric = true) { text -> text.toLongOrNull()?.takeIf { it in 0..(if (stage == 1) 43200 else 1440) }?.let { value -> change(when (stage) { 0 -> hotel.copy(checkInMs = value * 60000); 1 -> hotel.copy(stayMs = value * 60000); else -> hotel.copy(checkOutMs = value * 60000) }) } }
+        }
+        PrivateInput(hotel.nights.toString(), "Billable nights", "hotel-$index-nights", numeric = true) { it.toIntOrNull()?.takeIf { nights -> nights in 0..365 }?.let { nights -> change(hotel.copy(nights = nights)) } }
+        PrivateInput(hotel.nightlyPrice?.toString() ?: "", "Nightly price (${hotel.currency}; optional estimate)", "hotel-$index-price", numeric = true) { text -> if (text.isBlank()) change(hotel.copy(nightlyPrice = null)) else text.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1_000_000.0 }?.let { price -> change(hotel.copy(nightlyPrice = price)) } }
+        Text("Check-in, stay and checkout are held at this location. Leave now keeps the checkout stage.", style = MaterialTheme.typography.bodySmall)
+    } else {
+        PrivateInput((stop.dwellMs / 1000).toString(), "Stop duration (seconds)", "stop-dwell-$index", numeric = true) { value -> value.toLongOrNull()?.takeIf { it in 0..3600 }?.let { event(MobileUiEvent.StopDwell(index, it)) } }
+        stop.fuel?.let { fuel ->
+            PrivateInput(fuel.refillTargetLiters.toString(), "Refill target (litres)", "fuel-$index-target", numeric = true) { text -> text.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.1..2000.0 }?.let { amount -> event(MobileUiEvent.ConfigureStop(index, stop.copy(fuel = fuel.copy(refillTargetLiters = amount)))) } }
+            PrivateInput(fuel.pricePerLiter?.toString() ?: "", "Station price per litre (${state.draft.vacation.currency}; estimate)", "fuel-$index-price", numeric = true) { text -> if (text.isBlank()) event(MobileUiEvent.ConfigureStop(index, stop.copy(fuel = fuel.copy(pricePerLiter = null)))) else text.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1000.0 }?.let { price -> event(MobileUiEvent.ConfigureStop(index, stop.copy(fuel = fuel.copy(pricePerLiter = price)))) } }
+        }
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = { event(MobileUiEvent.ReorderStop(index, -1)) }, enabled = index > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("Move earlier") }
+        TextButton(onClick = { event(MobileUiEvent.ReorderStop(index, 1)) }, enabled = index + 1 < state.draft.stops.size, modifier = Modifier.heightIn(min = 48.dp)) { Text("Move later") }
+        TextButton(onClick = { event(MobileUiEvent.RemoveStop(index)) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Remove") }
+    }
+}
+
+@Composable private fun ActiveVacationCorrection(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    val budget = state.phone.snapshot.vacation ?: return
+    val config = state.phone.snapshot.activeChoices?.vacation ?: return
+    var expanded by remember { mutableStateOf(false) }
+    Action(if (expanded) "Close fuel correction" else "Correct estimated fuel / consumption", "vacation-correct-toggle", enabled = state.remainingEdit == null && state.phone.snapshot.editId == null) { expanded = !expanded }
+    if (!expanded) return
+    var fuel by remember { mutableStateOf(budget.remainingFuelLiters.toString()) }
+    var consumption by remember { mutableStateOf(config.litersPer100Km.toString()) }
+    var reserve by remember { mutableStateOf(config.reserveLiters.toString()) }
+    PrivateInput(fuel, "Correct remaining fuel (litres)", "vacation-correct-fuel", numeric = true) { fuel = it }
+    PrivateInput(consumption, "Estimated consumption (L/100 km)", "vacation-correct-consumption", numeric = true) { consumption = it }
+    PrivateInput(reserve, "Reserve (litres)", "vacation-correct-reserve", numeric = true) { reserve = it }
+    val f = fuel.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..config.tankLiters }
+    val c = consumption.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.1..200.0 }
+    val r = reserve.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..config.tankLiters }
+    Text("This is an explicit estimate correction. Spent fuel and costs stay recorded in this session. The phone rejects changes that leave upcoming stops unreachable.", style = MaterialTheme.typography.bodySmall)
+    Action("Apply fuel estimate correction", "vacation-correct-apply", enabled = f != null && c != null && r != null && state.phone.snapshot.editId == null) { event(MobileUiEvent.CorrectVacation(requireNotNull(f), requireNotNull(c), requireNotNull(r))) }
 }

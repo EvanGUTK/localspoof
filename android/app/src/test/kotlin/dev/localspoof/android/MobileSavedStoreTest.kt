@@ -76,4 +76,20 @@ class MobileSavedStoreTest {
         assertTrue(runCatching { MobileSavedStore.encode(listOf(MobileSavedStore.newItem("Bad", "", source.copy(drivingError = "Invalid range")))) }.isFailure)
     }
 
+
+    @Test fun explicitVacationAndTypedStopsRoundTripWithoutRuntimeStateOrInventingHotelFees() {
+        val hotel = HotelStop(60000, 3600000, 120000, 1, nightlyPrice = 100.0)
+        val stops = listOf(RouteStop(GeoPoint(1.1, 2.1), 300000, "Fuel", StopKind.FUEL, fuel = FuelStop(40.0)),
+            RouteStop(GeoPoint(1.15, 2.2), hotel.durationMs, "Hotel", StopKind.HOTEL, hotel = hotel))
+        val config = MobileVacationDraft(enabled = true, metric = true, tank = "50", consumption = "8", startingMethod = MobileFuelInput.AMOUNT,
+            starting = "20", reserve = "5", price = "1.5")
+        val bytes = MobileSavedStore.encode(listOf(MobileSavedStore.newItem("Vacation", "Trips", draft().copy(stops = stops, vacation = config))))
+        val loaded = MobileSavedStore.decode(bytes).single().draft
+        assertEquals(stops, loaded.stops); assertEquals(mobileVacationConfig(config), mobileVacationConfig(loaded.vacation))
+        assertNull(loaded.stops.last().hotel!!.fees); assertNull(loaded.stops.last().hotel!!.knownCost)
+        val text = bytes.toString(Charsets.UTF_8)
+        listOf("completedStops", "editId", "remainingFuelLiters", "refillCash", "provider", "sessionToken").forEach { assertFalse(text.contains(it)) }
+        assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"startingFuelLiters\":20.0,", "").toByteArray()) }.isFailure)
+        assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"refillTargetLiters\":40.0", "\"refillTargetLiters\":40.0,\"completed\":true").toByteArray()) }.isFailure)
+    }
 }

@@ -1,4 +1,10 @@
-# LocalSpoof 0.6 handoff for GPT-6.1 Sol
+# LocalSpoof 0.7 handoff for GPT-6.1 Sol
+
+Read [104WORK](104WORK.md), [the current 0.7 implementation handoff](HANDOFF_0_7_SOL_6_1.md) and [0.7 validation](VALIDATION_0_7.md) first. The selected usability and gas Vacation scope is implemented in matching 0.7.0/protocol-minor-6 components. Preserve the original Android signing identity and keep physical-device qualification separate from unit/source checks.
+
+The material below records earlier 0.6 artifacts and observations. Its installed hashes, protocol versions and pending-work statements are historical and do not supersede the 0.7 handoff.
+
+# Historical 0.6 build notes
 
 **Next work session:** read [104WORK](104WORK.md) first. It records newly reported Android map-return and missing usable Follow defects, dot/route-line alignment, continuous destination/airport edits, all seven selected usability additions and gas-only Vacation planning with starting fuel/range, station stops, MPG, hotel budgets and cost/ETA UI for both apps. EV charging and sensor spoofing remain deferred. This documentation update does not implement or qualify those items; begin tomorrow with map reliability and Follow/alignment. The handoff is intended for private GitHub/laptop continuation.
 

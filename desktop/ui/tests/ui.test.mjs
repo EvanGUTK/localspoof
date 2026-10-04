@@ -25,6 +25,7 @@ async function environment(native){
   for(const match of html.matchAll(/<([a-z]+)[^>]*\bid="([^"]+)"[^>]*>/g)){
     const element=new Element(),tag=match[0];element.value=tag.match(/\bvalue="([^"]*)"/)?.[1]??'';element.hidden=/\bhidden(?:\s|>)/.test(tag);element.disabled=/\bdisabled(?:\s|>)/.test(tag);elements.set(match[2],element);
   }
+  for(const [id,value] of Object.entries({originLat:'41.8781',originLon:'-87.6298',destinationLat:'41.8838',destinationLon:'-87.6324'}))elements.get(id).value=value;
   elements.get('searchProvider').value='PHOTON';elements.get('mapMode').value='online';elements.get('radioPolicy').value='MANUAL';elements.get('radioPolicy').usbOption=new Element();
   const categories=['HOTEL','FOOD','COFFEE','SHOPS','FUEL','HEALTH','ATTRACTIONS'].map(category=>{const e=new Element();e.dataset.category=category;return e;});
   const modes=['INSTANT','WALK','DRIVE','FLIGHT'].map(mode=>{const e=new Element();e.dataset.mode=mode;return e;});
@@ -61,7 +62,8 @@ test('native USB pairing, prepared plan, playback and Stop erase activity',async
     if(command==='request_phone'){
       const {type}=args.request;
       if(type==='Airports')return {ok:true,revision,state,payload:{airports:[{id:'test-airport',name:'Synthetic airport'}]}};
-      if(type==='PreparePlan'){const response={ok:true,revision,state,payload:{preparedId:'synthetic-plan',preview:{geometry:[{lat:1,lon:1},{lat:2,lon:2}],distanceMeters:1000,durationMs:100000,originAirport:null,destinationAirport:null,geometrySimplified:false}}};if(deferPrepare)return await new Promise(resolve=>{releasePrepare=()=>resolve(response);});return response;}
+      if(type==='BeginRemainingEdit')return {ok:true,revision,state,payload:{editId:'synthetic-edit',confirmedOrigin:{lat:1,lon:1},choices:{mode:'INSTANT',destination:{lat:2,lon:2},speedMps:1.4,radioPolicy:'MANUAL'}}};
+      if(type==='PreparePlan'||type==='PrepareRemainingPlan'){const response={ok:true,revision,state,payload:{preparedId:'synthetic-plan',preview:{geometry:[{lat:1,lon:1},{lat:2,lon:2}],distanceMeters:1000,durationMs:100000,originAirport:null,destinationAirport:null,geometrySimplified:false}}};if(deferPrepare)return await new Promise(resolve=>{releasePrepare=()=>resolve(response);});return response;}
       if(type==='CommitPlan')state='READY';if(type==='Start')state='ACTIVE';if(type==='Stop'){state='IDLE';revision++;}
       return {ok:true,state,revision,payload:type==='Stop'?{message:'Restore airplane mode manually on your phone.'}:{}};
     }
@@ -76,7 +78,7 @@ test('native USB pairing, prepared plan, playback and Stop erase activity',async
   [...intervals.values()][0]();await settle();assert.equal(elements.get('prepare').disabled,false);assert.equal(elements.get('radioPolicy').usbOption.disabled,false);
   elements.get('prepare').dispatch('click');await settle();assert.equal(elements.get('start').disabled,false);
   elements.get('start').dispatch('click');await settle();assert.equal(elements.get('sessionState').textContent,'Simulation active');
-  elements.get('prepare').dispatch('click');await settle();assert.equal(elements.get('start').disabled,false);
+  elements.get('destinationLat').value='';elements.get('prepare').dispatch('click');await settle();assert.equal(elements.get('start').disabled,true);elements.get('destinationLat').value='2';
   deferPrepare=true;elements.get('prepare').dispatch('click');await settle();assert.equal(elements.get('stop').disabled,false);
   elements.get('stop').dispatch('click');await settle();assert.equal(elements.get('originLat').value,'');assert.equal(elements.get('destinationLon').value,'');assert.match(elements.get('status').textContent,/Restore airplane/);assert.equal(intervals.size,0);assert.equal(elements.get('prepare').disabled,false);assert.equal(elements.get('sessionState').textContent,'Simulation stopped');
   releasePrepare();await settle();assert.equal(elements.get('start').disabled,true);assert.match(elements.get('status').textContent,/Restore airplane/);
@@ -281,7 +283,7 @@ test('Clear and editable radio choices cannot disable a committed phone USB flig
   const {elements,intervals}=await environment(native);await import('../src/app.ts?clear-committed-radio-test');
   elements.get('adbPath').value='/synthetic/platform-tools/adb';elements.get('scanDevices').dispatch('click');await settle();elements.get('connect').dispatch('click');await settle();
   elements.get('pair').dispatch('click');await settle();[...intervals.values()][0]();await settle();
-  elements.get('radioPolicy').value='USB';elements.get('clearActivity').dispatch('click');await settle();assert.equal(elements.get('radioPolicy').value,'MANUAL');assert.equal(elements.get('stop').disabled,false);
+  elements.get('radioPolicy').value='USB';elements.get('clearActivity').dispatch('click');await settle();assert.equal(elements.get('radioPolicy').value,'USB');assert.equal(elements.get('stop').disabled,false);
   [...intervals.values()][0]();await settle();assert.ok(calls.some(call=>call.command==='set_airplane'&&call.args.phaseId==='flight-committed-airplane'&&call.args.enabled===true));
 });
 
@@ -490,7 +492,7 @@ test('desktop prepares a no-pack all-instant airport journey with jump wait and 
 });
 
 test('a cancelled earlier online preview cannot remove the keepalive ownership of a newly paired preview',async()=>{
-  const calls=[];let state='ACTIVE',oldReply,newReply,routeCount=0;
+  const calls=[];let state='IDLE',oldReply,newReply,routeCount=0;
   const native=async(command,args={})=>{
     calls.push({command,args});if(command==='list_devices')return [{serial:'owner-fixture',state:'device'}];if(command==='connect_phone')return {connected:true};if(command==='pair_phone')return pendingApproval();if(command==='confirm_pair')return {ok:true,payload:{paired:true}};
     if(command==='online_route')return await new Promise(resolve=>{const reply=()=>resolve({profile:'DRIVE',provider:'FOSSGIS OSRM',points:[args.origin,args.destination],distanceMeters:1000,durationSeconds:100,snapOriginMeters:0,snapDestinationMeters:0});if(++routeCount===1)oldReply=reply;else newReply=reply;});
@@ -556,4 +558,20 @@ test('actual simulated speed and cruise range come from phone telemetry, live ed
 test('rapid telemetry polling sends one heartbeat per four seconds and retains status during slow planning',async()=>{
  const calls=[];let release;const native=async(command,args={})=>{calls.push({command,args});if(command==='list_devices')return [{serial:'cadence-fixture',state:'device'}];if(command==='connect_phone')return {connected:true};if(command==='pair_phone')return pendingApproval();if(command==='confirm_pair')return {ok:true,payload:{paired:true}};if(command==='online_route')return new Promise(resolve=>{release=()=>resolve({profile:'DRIVE',provider:'FOSSGIS OSRM',points:[{lat:41.8781,lon:-87.6298},{lat:41.8838,lon:-87.6324}],distanceMeters:1000,durationSeconds:80,snapOriginMeters:0,snapDestinationMeters:0});});if(command==='request_phone')return {ok:true,state:'IDLE',revision:0,payload:{}};return {};};
  const {elements,modes,intervals}=await environment(native);await import('../src/app.ts?motion-poll-cadence');elements.get('adbPath').value='/fixture/adb';elements.get('scanDevices').dispatch('click');await settle();elements.get('connect').dispatch('click');await settle();const tick=[...intervals.values()][0];tick.advance(500);await settle();tick.advance(500);await settle();const count=type=>calls.filter(c=>c.args?.request?.type===type).length;const first=count('Heartbeat');assert.equal(first,1);for(let i=0;i<4;i++){tick.advance(500);await settle();}assert.equal(count('Heartbeat'),first);const snapshots=count('Snapshot');modes[2].dispatch('click');elements.get('prepare').dispatch('click');await settle();tick.advance(500);await settle();assert.ok(count('Snapshot')>snapshots,'Provider planning must not freeze live status');tick.advance(1500);await settle();assert.equal(count('Heartbeat'),first+1);elements.get('clearActivity').dispatch('click');release();await settle();
+});
+
+test('an active phone route survives ordinary map clicks and draft edits; canceled held editing restores the approved geometry',async()=>{
+ const oldFetch=globalThis.fetch;globalThis.fetch=async()=>({ok:true,json:async()=>({version:8,sources:{},layers:[]})});let map;const sources=new Map(),calls=[];let held=false,timer=60000;
+ const activePreview={mode:'DRIVE',geometry:[{lat:0,lon:0},{lat:0,lon:.01}],distanceMeters:1112,durationMs:100000};
+ const choices={mode:'DRIVE',origin:{lat:0,lon:0},destination:{lat:0,lon:.01},speedMps:13.9,radioPolicy:'MANUAL',stops:[]};
+ const native=async(command,args={})=>{calls.push({command,args});if(command==='list_devices')return [{serial:'active-map-fixture',state:'device'}];if(command==='connect_phone')return {connected:true};if(command==='pair_phone')return pendingApproval();if(command==='confirm_pair')return {ok:true,payload:{paired:true}};if(command==='request_phone'){const type=args.request.type;if(type==='BeginRemainingEdit'){held=true;timer=null;return {ok:true,state:'PAUSED',revision:1,payload:{editId:'edit-1',confirmedOrigin:{lat:0,lon:.005},choices}};}if(type==='CancelRemainingEdit')held=false;return {ok:true,state:'PAUSED',revision:held?1:2,payload:{timedPauseRemainingMs:timer,activePreview,activeChoices:choices,canUndo:true,speeds:{walkMps:1.4,driveMps:13.9,flightMps:230},remainingMs:100000,remainingMeters:1112,waitingFor:null}};}return {};};
+ try{
+  const {elements,intervals}=await environment(native);
+  class MapStub{events=new Map();constructor(){map=this;}on(k,v){this.events.set(k,v);}isStyleLoaded(){return true;}getSource(k){return sources.get(k);}addSource(k,v){sources.set(k,{data:v.data,setData(data){this.data=data;}});}addLayer(){}addControl(){}setStyle(){this.events.get('style.load')?.();}resize(){}jumpTo(){}easeTo(){}getCenter(){return {lat:0,lng:0};}getZoom(){return 12;}}
+  window.maplibregl={Map:MapStub,AttributionControl:class{},Marker:class{setLngLat(){return this;}addTo(){return this;}remove(){}},addProtocol(){},removeProtocol(){}};
+  await import('../src/app.ts?active-map-retained-104');await settle();elements.get('adbPath').value='/fixture/adb';elements.get('scanDevices').dispatch('click');await settle();elements.get('connect').dispatch('click');await settle();[...intervals.values()][0]();await settle();
+  const original=structuredClone(sources.get('journey').data);const destination=elements.get('destinationLat').value;map.events.get('click')({lngLat:{lat:10,lng:20}});assert.deepEqual(sources.get('journey').data,original);assert.equal(elements.get('destinationLat').value,destination);assert.match(elements.get('status').textContent,/unchanged/);
+  elements.get('chooseDestination').dispatch('click');map.events.get('click')({lngLat:{lat:10,lng:20}});assert.equal(elements.get('destinationLat').value,'10.000000');assert.deepEqual(sources.get('journey').data,original);assert.equal(calls.some(c=>['CommitPlan','ApplyRemainingPlan'].includes(c.args?.request?.type)),false);
+  elements.get('beginRouteEdit').dispatch('click');await settle();assert.equal(elements.get('originLat').value,'0');assert.equal(elements.get('originLon').value,'0.005');assert.equal(elements.get('originLat').disabled,true);assert.match(elements.get('editNotice').textContent,/Scheduled resume was canceled/);[...intervals.values()][0]();await settle();assert.match(elements.get('editNotice').textContent,/press Resume/);elements.get('cancelRouteEdit').dispatch('click');await settle();assert.equal(held,false);assert.deepEqual(sources.get('journey').data,original);assert.equal(elements.get('applyRouteEdit').hidden,true);assert.match(elements.get('status').textContent,/Scheduled resume was canceled/);
+ }finally{globalThis.fetch=oldFetch;}
 });

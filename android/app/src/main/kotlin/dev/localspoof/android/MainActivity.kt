@@ -161,12 +161,73 @@ class MainActivity : ComponentActivity() {
         val screenScope = rememberCoroutineScope()
         DisposableEffect(Unit) { onDispose { model.cancelPendingPreparation() } }
         LaunchedEffect(phone.serviceRunning) { if (!phone.serviceRunning) unbindIfNeeded() }
+        LaunchedEffect(phone.snapshot.editId) {
+            if (model.remainingEdit?.held != null && phone.snapshot.editId != model.remainingEdit?.held?.id) model.finishRemainingEdit(false)
+        }
         LaunchedEffect(phone.snapshot.revision, phone.snapshot.state) {
             if (phone.snapshot.state == SessionState.IDLE && phone.snapshot.revision > 0) model.clearActivity()
         }
         MobileApp(MobileUiState(phone, model.section, model.draft, model.preferences,
-            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports), onEvent = { event ->
+            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports, model.remainingEdit, model.mapOverlay), onEvent = { event ->
             when (event) {
+                is MobileUiEvent.BeginRemainingEdit -> runCatching {
+                    if (event.useUndo) {
+                        val held = RuntimeModel.beginRemainingEdit(true)
+                        model.startRemainingEdit(MobileRemainingDraft(held.choices, held.phase, held))
+                    } else {
+                        val snapshot = RuntimeModel.view.value.snapshot
+                        val choices = requireNotNull(snapshot.activeChoices)
+                        model.startRemainingEdit(MobileRemainingDraft(choices, snapshot.phase))
+                    }
+                }.onFailure { RuntimeModel.showError("Edit unavailable. Finish the current placement or airplane-mode step first.") }
+                MobileUiEvent.CancelRemainingEdit -> model.remainingEdit?.let { draftEdit ->
+                    model.cancelPendingPreparation()
+                    draftEdit.held?.let { held -> runCatching { RuntimeModel.cancelRemaining(held.id, RuntimeModel.view.value.snapshot.revision) } }
+                    model.finishRemainingEdit(false)
+                }
+                MobileUiEvent.ApplyRemainingEdit -> if (model.remainingEdit != null && model.draft.preparedId != null && !model.draft.busy) {
+                    val draft = model.draft
+                    val draftEdit = requireNotNull(model.remainingEdit)
+                    val token = model.beginPreparation()
+                    screenScope.launch {
+                        var held: RemainingEditContext? = null
+                        var applied = false
+                        try {
+                            held = draftEdit.held ?: RuntimeModel.beginRemainingEdit()
+                            model.attachEditHold(held)
+                            val request = mobilePlanRequest(draft, held.confirmedOrigin, held.choices.vacation)
+                            val prepared = withContext(Dispatchers.Default) { RuntimeModel.prepareRemaining(held.id, request, held.revision) }
+                            check(model.acceptsPreparation(token)) { "EDIT_CANCELLED" }
+                            RuntimeModel.applyRemaining(held.id, prepared.id, RuntimeModel.view.value.snapshot.revision)
+                            applied = true
+                            model.finishRemainingEdit(true)
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) {
+                            if (model.acceptsPreparation(token)) RuntimeModel.showError("Apply failed. Your approved journey is retained. Check offline road coverage, fuel reserve and airport eligibility, then preview again.")
+                        } finally {
+                            if (!applied && held != null && RuntimeModel.view.value.snapshot.editId == held.id)
+                                runCatching { RuntimeModel.cancelRemaining(held.id, RuntimeModel.view.value.snapshot.revision) }
+                            if (!applied && model.remainingEdit?.held?.id == held?.id) { model.releaseEditHold(); model.invalidate() }
+                            model.finishPreparation(token)
+                        }
+                    }
+                }
+                is MobileUiEvent.TimedPause -> runCatching { RuntimeModel.timedPause(event.seconds) }
+                    .onFailure { RuntimeModel.showError("Timed stop unavailable during this placement, edit or airplane-mode step.") }
+                MobileUiEvent.CancelTimedPause -> runCatching { RuntimeModel.pause() }
+                    .onFailure { RuntimeModel.showError("The timed stop has already ended. Check the current playback state.") }
+                MobileUiEvent.LeaveStop -> runCatching { RuntimeModel.leaveStop() }
+                    .onFailure { RuntimeModel.showError("Leave now is available after confirmed hotel arrival.") }
+                is MobileUiEvent.CorrectVacation -> runCatching { RuntimeModel.updateVacation(remainingFuelLiters = event.fuelLiters, litersPer100Km = event.consumption, reserveLiters = event.reserveLiters) }
+                    .onFailure { RuntimeModel.showError("Fuel correction rejected. Check tank capacity, reserve and reachable future stops. The current estimate is retained.") }
+                is MobileUiEvent.Vacation -> { model.invalidate(); model.draft = model.draft.copy(vacation = event.draft) }
+                is MobileUiEvent.ReorderStop -> if (event.index in model.draft.stops.indices && event.index + event.offset in model.draft.stops.indices) {
+                    val stops = model.draft.stops.toMutableList(); val moved = stops.removeAt(event.index); stops.add(event.index + event.offset, moved)
+                    model.invalidate(); model.draft = model.draft.copy(stops = stops)
+                }
+                is MobileUiEvent.ConfigureStop -> if (event.index in model.draft.stops.indices) {
+                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) event.stop else stop })
+                }
                 is MobileUiEvent.Section -> model.section = event.section
                 is MobileUiEvent.Edit -> model.edit(event.field, event.value)
                 is MobileUiEvent.SelectMode -> model.selectMode(event.mode)
@@ -203,7 +264,7 @@ class MainActivity : ComponentActivity() {
                 is MobileUiEvent.AddStop -> runCatching {
                     require(event.dwellSeconds in 0..3600 && model.draft.stops.size < 32 && model.draft.mode in setOf(Mode.WALK, Mode.DRIVE))
                     val stop = RouteStop(event.point, event.dwellSeconds * 1000, event.label)
-                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops + stop)
+                    model.invalidate(); model.draft = model.draft.copy(stops = if (event.next) listOf(stop) + model.draft.stops else model.draft.stops + stop)
                 }.onFailure { RuntimeModel.showError("Choose a walking or driving route and a valid stop, up to 32 stops.") }
                 is MobileUiEvent.RemoveStop -> if (event.index in model.draft.stops.indices) {
                     model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.filterIndexed { index, _ -> index != event.index })
@@ -212,7 +273,7 @@ class MainActivity : ComponentActivity() {
                     model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) stop.copy(dwellMs = event.seconds * 1000) else stop })
                 }
                 is MobileUiEvent.LoadSaved -> {
-                    model.invalidate(); model.draft = event.draft.copy(preparedId = null, busy = false, speedError = null, flightSpeedError = null,
+                    model.invalidate(); model.draft = event.draft.copy(stops = event.draft.stops.map { it.copy(id = java.util.UUID.randomUUID().toString()) }, preparedId = null, busy = false, speedError = null, flightSpeedError = null,
                         speedText = mobileFormatSpeed(event.draft.speedMps, model.preferences.speedUnit),
                         flightSpeedText = mobileFormatSpeed(event.draft.flightSpeedMps, model.preferences.speedUnit), driveMinText = mobileFormatSpeed(event.draft.driveMinMps, model.preferences.speedUnit), driveMaxText = mobileFormatSpeed(event.draft.driveMaxMps, model.preferences.speedUnit))
                 }
@@ -237,21 +298,11 @@ class MainActivity : ComponentActivity() {
                     val revision = RuntimeModel.coordinator.snapshot().revision
                     screenScope.launch {
                         try {
-                            require(draft.mode != Mode.FLIGHT || draft.flightTransitMode != FlightTransitMode.TIMED || draft.flightSpeedError == null)
-                            require(draft.speedError == null || draft.mode == Mode.FLIGHT && draft.departureGroundMode == GroundLegMode.INSTANT && draft.arrivalGroundMode == GroundLegMode.INSTANT)
-                            require(mobileDrivingValid(draft))
-                            val destination = GeoPoint(draft.destinationLat.toDouble(), draft.destinationLon.toDouble())
-                            val origin = if (draft.mode == Mode.INSTANT) destination else GeoPoint(draft.originLat.toDouble(), draft.originLon.toDouble())
-                            val custom = if (draft.customPath && draft.mode in setOf(Mode.WALK, Mode.DRIVE)) listOf(origin) + draft.stops.map { it.point } + destination else null
-                            val flight = if (draft.mode == Mode.FLIGHT) {
-                                val boardingSeconds = draft.boardingHoldSeconds.toDouble().also { require(it.isFinite() && it in 0.0..3600.0) }
-                                FlightOptions(simulationOnly = draft.simulationOnly, boardingMs = (boardingSeconds * 1000).toLong(),
-                                    originAirportId = draft.departureId.trim().takeIf { it.isNotBlank() }, destinationAirportId = draft.arrivalId.trim().takeIf { it.isNotBlank() },
-                                    departureGroundMode = draft.departureGroundMode, arrivalGroundMode = draft.arrivalGroundMode, flightTransitMode = draft.flightTransitMode)
-                            } else null
-                            val request = PlanRequest(draft.mode, origin, destination, draft.speedMps, custom, flight,
-                                flightSpeedMps = draft.flightSpeedMps.takeIf { draft.mode == Mode.FLIGHT }, stops = draft.stops.takeIf { draft.mode in setOf(Mode.WALK, Mode.DRIVE) } ?: emptyList(), speedControls = mobileDrivingControls(draft))
-                            val prepared = withContext(Dispatchers.Default) { RuntimeModel.prepare(request, revision) }
+                            val context = model.remainingEdit
+                            val origin = if (context != null && context.held == null) RuntimeModel.view.value.snapshot.point else context?.confirmedOrigin
+                            val request = mobilePlanRequest(draft, origin, context?.choices?.vacation)
+                            val held = context?.held
+                            val prepared = withContext(Dispatchers.Default) { if (held != null) RuntimeModel.prepareRemaining(held.id, request, revision) else if (context != null) RuntimeModel.prepareRemainingDraft(request, revision) else RuntimeModel.prepare(request, revision) }
                             if (model.acceptsPreparation(token)) model.draft = model.draft.copy(preparedId = prepared.id)
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) {
@@ -263,7 +314,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 MobileUiEvent.StartLocal -> model.draft.preparedId?.let { id ->
-                    if (!model.draft.busy && model.draft.speedError == null && model.draft.flightSpeedError == null && mobileDrivingValid(model.draft)) {
+                    if (model.remainingEdit == null && !model.draft.busy && model.draft.speedError == null && model.draft.flightSpeedError == null && mobileDrivingValid(model.draft)) {
                         try { RuntimeModel.commit(id); model.invalidate(); launchService(SimulationService.START) }
                         catch (_: Exception) { model.invalidate(); RuntimeModel.showError("Preview is stale; prepare again.") }
                     }

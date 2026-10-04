@@ -142,4 +142,19 @@ class MobileMapPolicyTest {
         assertFalse(payload.getValue("follow").jsonPrimitive.boolean)
     }
 
+
+    @Test fun activeGeometrySurvivesDraftSelectionAndCandidatePreviewWhilePlaying() {
+        val coordinator = Coordinator()
+        val start = GeoPoint(1.0, 2.0); val destination = GeoPoint(1.01, 2.01); val next = GeoPoint(1.02, 2.02)
+        val active = coordinator.prepare(PlanRequest(Mode.DRIVE, start, destination, customPath = listOf(start, destination))).preview
+        val candidate = coordinator.prepare(PlanRequest(Mode.DRIVE, start, next, customPath = listOf(start, next))).preview
+        val phone = PhoneView(coordinator.snapshot().copy(state = SessionState.ACTIVE, activePreview = active), preview = candidate)
+        val payload = Json.parseToJsonElement(mobileMapState(phone, MobileDraft(destinationLat = next.lat.toString(), destinationLon = next.lon.toString(), preparedId = "candidate"))).jsonObject
+        assertEquals(destination.lon, payload.getValue("destination").jsonObject.getValue("lon").jsonPrimitive.double, 0.0)
+        assertEquals(next.lon, payload.getValue("candidateDestination").jsonObject.getValue("lon").jsonPrimitive.double, 0.0)
+        assertEquals(destination.lon, payload.getValue("route").jsonArray.last().jsonObject.getValue("lon").jsonPrimitive.double, 0.0)
+        assertEquals(1, payload.getValue("candidateSegments").jsonArray.size)
+        assertTrue(MobileMapView.isGesture(Uri.parse("https://localspoof.invalid/gesture")))
+        assertFalse(MobileMapView.isGesture(Uri.parse("https://localspoof.invalid/gesture?Stop=true")))
+    }
 }

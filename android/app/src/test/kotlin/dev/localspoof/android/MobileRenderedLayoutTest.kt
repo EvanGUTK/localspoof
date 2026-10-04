@@ -482,4 +482,36 @@ class MobileRenderedLayoutTest {
         compose.onNodeWithTag("phone-speed-gauge").assertTextContains("Stale", substring = true)
     }
 
+
+    @Test fun mapSettingsReturnRetainsOneRendererAndSelectedVisibleFollowWithoutPlaybackCommands() {
+        var section by mutableStateOf(MobileSection.MAP)
+        val events = mutableListOf<MobileUiEvent>()
+        compose.setContent {
+            DeviceConfigurationOverride(DeviceConfigurationOverride.ForcedSize(DpSize(360.dp, 800.dp))) {
+                MaterialTheme(colorScheme = darkColorScheme()) {
+                    MobileApp(MobileUiState(phone(), section = section), { event -> events.add(event); if (event is MobileUiEvent.Section) section = event.section })
+                }
+            }
+        }
+        fun renderer(): MobileMapView {
+            val found = mutableListOf<MobileMapView>()
+            fun collect(view: View) { if (view is MobileMapView) found.add(view); if (view is ViewGroup) for (i in 0 until view.childCount) collect(view.getChildAt(i)) }
+            collect(compose.activity.window.decorView); assertEquals(1, found.size); return found.single()
+        }
+        compose.waitForIdle()
+        val first = renderer()
+        visibleAction("phone-follow"); compose.onNodeWithTag("phone-follow").performClick().assertIsSelected()
+        repeat(3) {
+            compose.onNodeWithTag("mobile-section-selector").performClick(); compose.onNodeWithTag("nav-settings-menu").performClick(); compose.waitForIdle()
+            assertSame(first, renderer()); assertEquals(View.INVISIBLE, first.visibility)
+            compose.onNodeWithTag("nav-map").performClick(); compose.waitForIdle()
+            assertSame(first, renderer()); assertEquals(View.VISIBLE, first.visibility)
+            compose.onNodeWithTag("phone-follow").assertIsSelected(); visibleAction("phone-fit-route")
+        }
+        compose.onNodeWithTag("map-key-toggle").performClick()
+        compose.onNodeWithTag("phone-map-retry").performClick(); compose.waitForIdle()
+        assertNotSame("Explicit map retry replaces only the renderer", first, renderer())
+        compose.onNodeWithTag("phone-follow").assertIsSelected()
+        assertTrue(events.all { it is MobileUiEvent.Section })
+    }
 }

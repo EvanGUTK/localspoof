@@ -62,3 +62,11 @@ test('spherical flight display keeps coincident and antipodal endpoints finite a
     assert.deepEqual(data[0],[0,0]);assert.equal(data.at(-1)[1],0);
   }
 });
+
+test('authenticated remaining flight tails decode without inventing a departure leg and reject reordered roles',()=>{
+ const air={role:'AIR',kind:'FLIGHT',points:[a,b],durationMs:100,routeSource:'FLIGHT_JOURNEY'},arrival={role:'ARRIVAL',kind:'DRIVE',points:[b,a],durationMs:1000,routeSource:'ONLINE_ROUTER',routeProvider:'FOSSGIS OSRM'};
+ assert.deepEqual(decodeSegments([air,arrival],true),[air,arrival]);assert.deepEqual(decodeSegments([arrival],true),[arrival]);assert.throws(()=>decodeSegments([air,arrival]));assert.throws(()=>decodeSegments([arrival,air],true));assert.throws(()=>decodeSegments([{...arrival,role:'DEPARTURE'}],true));
+});
+test('flight display tessellates more densely at close zoom while keeping bounded finite geographic points',()=>{
+ const a={lat:80,lon:-30},b={lat:80,lon:30};const segment={role:'AIR',kind:'FLIGHT',points:[a,b],durationMs:1000,routeSource:'FLIGHT_JOURNEY'};const wide=routeFeatures([a,b],[segment],4).features[0].geometry.coordinates,close=routeFeatures([a,b],[segment],18).features[0].geometry.coordinates;assert.ok(close.length>wide.length);assert.ok(close.length<=8192);assert.ok(close.every(p=>p.every(Number.isFinite)));assert.deepEqual(close[0],[a.lon,a.lat]);assert.deepEqual(close.at(-1),[b.lon,b.lat]);
+});

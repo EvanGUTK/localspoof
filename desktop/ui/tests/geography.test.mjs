@@ -229,3 +229,12 @@ test('mapped limits on multiple stop legs preserve segment alignment and leave s
  const previous=globalThis.window,middle={lat:0,lon:0.005};let leg=0;globalThis.window={__TAURI__:{core:{invoke:async(_command,args)=>{leg++;const first=leg===1?args.origin:{...args.origin,lon:args.origin.lon+0.000002};return wire([first,args.destination],{edgeSpeedLimits:[leg===1?10:20],distanceMeters:distance(first,args.destination)});}}}};
  try{const preview=await previewJourney(plan({stops:[{point:middle,dwellSeconds:10}]}),{mode:'online'});assert.equal(preview.onlineRoute.points.length,4);assert.deepEqual(preview.onlineRoute.edgeSpeedLimits,[10,null,20]);assert.deepEqual(preview.stopPointIndices,[1]);}finally{globalThis.window=previous;}
 });
+
+test('OSRM HTTP400 NoSegment and NoRoute are endpoint failures, while other HTTP errors and malformed bodies remain unavailable',async()=>{
+ const {routingErrorCode}=await import('../src/geography.ts');
+ for(const code of ['NoSegment','NoRoute']){const body=JSON.stringify({code,message:'private provider details'});assert.equal(routingErrorCode(400,body),'NO_ROUTE');for(const status of [404,429,500])assert.equal(routingErrorCode(status,body),'ROUTING_UNAVAILABLE');}
+ for(const body of ['<html>gateway error</html>','{"code":"InvalidQuery","message":"private"}','{"code":null}','[]','{"code":"NoSegment"}'+' '.repeat(65536)])assert.equal(routingErrorCode(400,body),'ROUTING_UNAVAILABLE');
+});
+test('native endpoint-too-far error maps the actual native code to static road guidance',async()=>{
+ const previous=globalThis.window;globalThis.window={__TAURI__:{core:{invoke:async()=>{throw 'ROUTE_ENDPOINT_TOO_FAR';}}}};try{await assert.rejects(previewJourney(plan(),{mode:'online'}),/within 250 meters/);}finally{globalThis.window=previous;}
+});

@@ -21,3 +21,8 @@ test('saved variable cruising and road-limit preference round trip without losin
  for(const extra of [{driveMinMps:56,driveMaxMps:40},{driveMaxMps:57},{drivingSpeedMode:'RANDOM'},{followRoadLimits:'false'}])assert.throws(()=>decodeSavedStore({version:1,items:[{...route,...extra}]}));
  const legacy=decodeSavedStore({version:1,items:[{...place,kind:'ROUTE',origin:{lat:0,lon:0},mode:'DRIVE',speedMps:13.9}]}).items[0];assert.equal(legacy.drivingSpeedMode,'FIXED');assert.equal(legacy.driveMinMps,13.9);assert.equal(legacy.followRoadLimits,true);
 });
+
+test('saved vacation routes retain typed stops and units-normalized config without any runtime ledger',()=>{
+ const route={id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',name:'Trip',group:'',kind:'ROUTE',origin:{lat:0,lon:0},destination:{lat:0,lon:1},mode:'DRIVE',vacation:{tankLiters:60,startingFuelLiters:30,reserveLiters:5,litersPer100Km:8,fuelGrade:'DIESEL',currency:'EUR'},stops:[{id:'fuel-1',point:{lat:0,lon:.5},kind:'FUEL',dwellSeconds:300,fuel:{refillTargetLiters:55,pricePerLiter:1.8,currency:'EUR'}},{id:'hotel-1',point:{lat:0,lon:.7},kind:'HOTEL',dwellSeconds:43800,hotel:{checkInSeconds:300,staySeconds:43200,checkOutSeconds:300,nights:1,currency:'EUR'}}]};
+ const decoded=decodeSavedStore({version:1,items:[route]}).items[0];assert.deepEqual(decoded.vacation,route.vacation);assert.deepEqual(decoded.stops,route.stops);assert.throws(()=>decodeSavedStore({version:1,items:[{...route,ledger:{}}]}));assert.throws(()=>decodeSavedStore({version:1,items:[{...route,vacation:{...route.vacation,startingFuelLiters:70}}]}));
+});

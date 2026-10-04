@@ -7,16 +7,16 @@ const read = async path => readFile(new URL(path, root), 'utf8');
 const fixture = JSON.parse(await read('protocol/fixtures/responses.json'));
 const examples = fixture.examples;
 assert.equal(fixture.protocolMajor, 1);
-assert.equal(fixture.protocolMinor, 5);
-assert.equal(examples.hello.payload.protocolMinor, 5);
+assert.equal(fixture.protocolMinor, 6);
+assert.equal(examples.hello.payload.protocolMinor, 6);
 assert.equal(examples.hello.payload.approvalPairing, true);
 assert.equal(examples.hello.payload.livePhoneLocation, true);
 assert.equal(examples.hello.payload.flightLegOptions, true);
 assert.equal(examples.hello.payload.liveJourneyControls, true);
 assert.equal(examples.hello.payload.routeStops, true);
-for (const flag of ['motionTelemetry','variableCruise','mappedRoadLimits']) assert.equal(examples.hello.payload[flag],true);
+for (const flag of ['motionTelemetry','variableCruise','mappedRoadLimits','remainingJourneyEdits','timedPause','vacationStops','vacationFuelStops','hotelStages','vacationCorrections']) assert.equal(examples.hello.payload[flag],true);
 const schema = JSON.parse(await read('protocol/schema.json'));
-assert.equal(schema.properties.protocolMinor.minimum, 5);
+assert.equal(schema.properties.protocolMinor.minimum, 6);
 const pairId = new RegExp(schema.$defs.pairId.pattern);
 const comparison = new RegExp(schema.$defs.comparisonCode.pattern);
 assert.equal(schema.$defs.pairId.minLength, 32);
@@ -166,7 +166,7 @@ assert.ok(failingOwner.indexOf('provider !== expectedOwner') < failingOwner.inde
 assert.ok(failingOwner.indexOf('provider !== expectedOwner') < failingOwner.indexOf('expectedOwner.cleanup()'));
 assert.ok(runtime.includes('stoppingSnapshot.mode == Mode.FLIGHT && activeRadioPolicy == "USB"'));
 assert.ok(runtime.includes('Check airplane mode manually in Android settings; an in-flight USB command may still finish.'));
-console.log('PASS: minor-5 motion, approval vectors, authenticated phone freshness, typed flight segments, response privacy and Android field names agree. Fixture/source checks only; transport was not executed.');
+console.log('PASS: minor-6 controls, motion, approval vectors, authenticated phone freshness, typed flight segments, response privacy and Android field names agree. Fixture/source checks only; transport was not executed.');
 
 assert.ok(schema.properties.type.enum.includes('SetSpeeds'));
 assert.ok(schema.properties.type.enum.includes('JumpToNextStop'));
@@ -208,3 +208,45 @@ assert.equal(schema.$defs.geopack.properties.edges.items.properties.speedLimitSo
 assert.ok(service.includes('const val TICK_MS = 200L'));
 assert.ok(service.includes('wake.acquire(60_000L)'));
 assert.ok(stopMethod.includes('playbackWakeLock = null'));
+
+// New control fixtures describe authenticated, revision-bound payloads only.
+// Runtime authority and cross-field feasibility remain covered by phone/native tests.
+function strictFields(value, definition) {
+ assert.ok(value && typeof value==='object' && !Array.isArray(value));
+ assert.equal(definition.additionalProperties,false);
+ for (const key of definition.required??[]) assert.ok(key in value,`Missing ${key}`);
+ assert.ok(Object.keys(value).length >= (definition.minProperties??0));
+ for (const [key,field] of Object.entries(value)) {
+  let rule=definition.properties[key]; assert.ok(rule,`Unexpected ${key}`);
+  if(rule.$ref) rule=schema.$defs[rule.$ref.split('/').at(-1)];
+  if(rule.enum) assert.ok(rule.enum.includes(field));
+  if(rule.type==='number') {
+   assert.ok(Number.isFinite(field)); assert.ok(field>=rule.minimum&&field<=rule.maximum);
+  }
+  if(rule.type==='string') {
+   assert.equal(typeof field,'string');
+   if(rule.pattern) assert.match(field,new RegExp(rule.pattern));
+   if(rule.minLength) assert.ok(field.length>=rule.minLength);
+   if(rule.maxLength) assert.ok(field.length<=rule.maxLength);
+  }
+  if(rule.type==='boolean') assert.equal(typeof field,'boolean');
+ }
+}
+for(const name of ['beginRemainingEdit','prepareRemainingPlan','applyRemainingPlan','cancelRemainingEdit','timedPause','leaveStop','updateVacation']) {
+ strictFields(fixture.requestExamples[name],schema.$defs[name]);
+ const command=name[0].toUpperCase()+name.slice(1);
+ assert.ok(schema.properties.type.enum.includes(command));
+ const server=await read('android/app/src/main/kotlin/dev/localspoof/android/PhoneControlServer.kt');
+ const native=await read('desktop/native/src/bridge.rs');
+ assert.ok(server.includes(`"${command}"`));assert.ok(native.includes(`"${command}"`));
+ assert.throws(()=>strictFields({...fixture.requestExamples[name],token:'synthetic'},schema.$defs[name]));
+}
+for(const invalid of [{},{remainingFuelLiters:-1},{remainingFuelLiters:Infinity},{litersPer100Km:0},{reserveLiters:2001}]) assert.throws(()=>strictFields(invalid,schema.$defs.updateVacation));
+for(const durationSeconds of [0,59,61,301,901]) assert.throws(()=>strictFields({durationSeconds},schema.$defs.timedPause));
+strictFields(fixture.requestExamples.vacationDrive.vacation,schema.$defs.vacation);
+strictFields(fixture.requestExamples.hotelStop.hotel,schema.$defs.hotelStop);
+assert.equal(fixture.requestExamples.vacationDrive.vacation.startingFuelLiters,24,'Partial starting fuel must remain explicit');
+assert.equal(fixture.requestExamples.hotelStop.hotel.checkInSeconds+fixture.requestExamples.hotelStop.hotel.staySeconds+fixture.requestExamples.hotelStop.hotel.checkOutSeconds,fixture.requestExamples.hotelStop.dwellSeconds);
+assert.ok(!('remainingFuelLiters' in schema.$defs.vacation.properties),'Runtime fuel ledger cannot become saved plan authority');
+assert.equal(schema.$defs.prepareRemainingPlan.properties.request.$ref,'#/$defs/remainingPlan');
+assert.deepEqual(schema.$defs.remainingPreview.properties.segments.oneOf.map(rule=>rule.minItems),[3,2,1]);

@@ -49,6 +49,7 @@ object RuntimeModel {
     private val phoneLocation = PhoneLocationState()
     private val preparedRadioPolicies = LinkedHashMap<String, String>()
     private var activeRadioPolicy: String? = null
+    private var controllerOwnedEdit = false
     private var radioGeneration = 0L
     private var initialAirplaneAtStart: Boolean? = null
     var controllerGeneration: Long = 0L
@@ -96,6 +97,53 @@ object RuntimeModel {
         preview = null; message = "Plan ready. Start on this phone."; publish()
     }
 
+    fun beginRemainingEdit(useUndo: Boolean = false, revision: Long = coordinator.snapshot().revision, fromDesktop: Boolean = false): RemainingEditContext = synchronized(lock) {
+        check(phoneArmed && serviceRunning) { "PHONE_START_REQUIRED" }
+        val confirmed=phoneLocation.snapshot(SystemClock.elapsedRealtimeNanos())
+        check(confirmed?.source==PhoneLocationSource.SIMULATION && confirmed.ageMs<=3000) { "CONFIRMED_LOCATION_STALE" }
+        coordinator.beginRemainingEdit(SystemClock.elapsedRealtime(), useUndo, revision).also { controllerOwnedEdit=fromDesktop;preview=null;preparedRadioPolicies.clear();publish() }
+    }
+    fun prepareRemainingDraft(request: PlanRequest, revision: Long = coordinator.snapshot().revision): PreparedPlan {
+        val prepared=coordinator.prepareRemainingDraft(request,revision)
+        synchronized(lock) { check(coordinator.snapshot().revision==revision && coordinator.snapshot().editId==null) { "STALE_REVISION" };preview=prepared.preview;message=null;publish() }
+        return prepared
+    }
+    fun prepareRemaining(editId: String, request: PlanRequest, revision: Long = coordinator.snapshot().revision): PreparedPlan {
+        val prepared=coordinator.prepareRemaining(editId,request,revision)
+        synchronized(lock) { check(coordinator.snapshot().editId==editId && coordinator.snapshot().revision==revision) { "STALE_EDIT" };preview=prepared.preview;message=null;publish() }
+        return prepared
+    }
+    fun applyRemaining(editId: String, preparedId: String, revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        coordinator.applyRemaining(editId,preparedId,SystemClock.elapsedRealtime(),revision)
+        controllerOwnedEdit=false;preview=null;preparedRadioPolicies.clear();message=null;publish()
+    }
+    fun cancelRemaining(editId: String, revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        coordinator.cancelRemaining(editId,SystemClock.elapsedRealtime(),revision);controllerOwnedEdit=false;preview=null;message=null;publish()
+    }
+    fun timedPause(durationSeconds: Long, revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        coordinator.timedPause(Math.multiplyExact(durationSeconds,1000),SystemClock.elapsedRealtime(),revision);preview=null;publish()
+    }
+    fun updateVacation(remainingFuelLiters: Double? = null, litersPer100Km: Double? = null, reserveLiters: Double? = null,
+        revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        coordinator.updateVacation(remainingFuelLiters,litersPer100Km,reserveLiters,revision);preview=null;publish()
+    }
+    fun leaveStop(revision: Long = coordinator.snapshot().revision) = synchronized(lock) { coordinator.leaveStop(revision);publish() }
+
+    private fun cancelControllerEdit() {
+        val snapshot=coordinator.snapshot()
+        val currentEditId=snapshot.editId
+        if(controllerOwnedEdit && currentEditId != null) {
+            coordinator.cancelRemaining(currentEditId,SystemClock.elapsedRealtime(),snapshot.revision)
+            preview=null
+        }
+        controllerOwnedEdit=false
+    }
+    fun editContextJson(context: RemainingEditContext): JsonObject = synchronized(lock) {
+        val choices=context.choices.choicesJson()
+        val policyChoices=if(context.choices.mode==Mode.FLIGHT) JsonObject(choices + ("radioPolicy" to JsonPrimitive(activeRadioPolicy ?: "MANUAL"))) else choices
+        JsonObject(context.json() + ("choices" to policyChoices))
+    }
+
     fun attach(adapter: FrameworkLocationProvider) = synchronized(lock) {
         provider = adapter; serviceRunning = true; phoneLocation.attach(adapter); publish()
     }
@@ -116,7 +164,7 @@ object RuntimeModel {
     /** A failed/dead socket revokes only its own desktop authority, not phone playback consent. */
     fun desktopUnavailable(expectedGeneration: Long = controllerGeneration) = synchronized(lock) {
         if (expectedGeneration != controllerGeneration) return@synchronized
-        lease.revoke(); desktopEnabled = false
+        cancelControllerEdit();lease.revoke(); desktopEnabled = false
         message = "LOCAL_USB_SOCKET_UNAVAILABLE"
         publish()
     }
@@ -175,6 +223,7 @@ object RuntimeModel {
         // Check ownership before even lease/radio mutations or publishing a snapshot.
         if (!serviceRunning || provider !== expectedOwner) return@synchronized
         lease.expire(SystemClock.elapsedRealtime())
+        if(controllerOwnedEdit && lease.token()==null) cancelControllerEdit()
         radio = radioEnabled
         try {
             coordinator.observeRadio(radioEnabled)
@@ -212,7 +261,7 @@ object RuntimeModel {
             stoppingSnapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING, SessionState.ERROR)
         val restoreRadio = coordinator.recoveryAirplaneState() != null
         // Revoke control first so queued external commands cannot survive local Stop.
-        lease.revoke(); desktopEnabled = false; phoneArmed = false; phoneLocation.clear()
+        controllerOwnedEdit=false;lease.revoke(); desktopEnabled = false; phoneArmed = false; phoneLocation.clear()
         coordinator.stop(); preview = null
         preparedRadioPolicies.clear(); activeRadioPolicy = null; initialAirplaneAtStart = null
         val cleanupFailed = provider?.cleanup() == false
@@ -233,7 +282,7 @@ object RuntimeModel {
     }
 
     fun disconnect(generation: Long, channelId: String) = synchronized(lock) {
-        if (generation == controllerGeneration) { lease.disconnect(channelId); publish() }
+        if (generation == controllerGeneration) { lease.disconnect(channelId);if(lease.token()==null) cancelControllerEdit();publish() }
     }
     fun showError(code: String) = synchronized(lock) { message = code; publish() }
 
@@ -275,6 +324,15 @@ object RuntimeModel {
                 put("radioObserved", radio)
                 put("desiredAirplaneMode", snapshot.desiredAirplaneMode?.let(::JsonPrimitive) ?: JsonNull)
                 put("preparedPreview", preview?.json() ?: JsonNull)
+                put("activePreview",snapshot.activePreview?.json() ?: JsonNull)
+                put("activeChoices",snapshot.activeChoices?.choicesJson()?.let { choices -> if(snapshot.mode==Mode.FLIGHT) JsonObject(choices + ("radioPolicy" to JsonPrimitive(activeRadioPolicy ?: "MANUAL"))) else choices } ?: JsonNull)
+                put("editId",snapshot.editId?.let(::JsonPrimitive) ?: JsonNull);put("canUndo",snapshot.canUndo)
+                put("timedPauseRemainingMs",snapshot.timedPauseRemainingMs?.let(::JsonPrimitive) ?: JsonNull)
+                put("stages",JsonArray(snapshot.stages.map { stage -> buildJsonObject { put("label",stage.label);put("kind",stage.kind);put("status",stage.status);put("remainingMs",stage.remainingMs?.let(::JsonPrimitive) ?: JsonNull) } }))
+                put("vacation",snapshot.vacation?.let { v -> buildJsonObject {
+                    put("remainingFuelLiters",v.remainingFuelLiters);put("consumedFuelLiters",v.consumedFuelLiters);put("refillCash",v.refillCash?.let(::JsonPrimitive) ?: JsonNull);put("hotelCost",v.hotelCost?.let(::JsonPrimitive) ?: JsonNull);put("consumedFuelValue",v.consumedFuelValue?.let(::JsonPrimitive) ?: JsonNull)
+                    put("currency",v.currency);put("effectiveMpg",v.effectiveMpg);put("estimatedRemainingRangeMeters",v.estimatedRemainingRangeMeters);put("stopStage",v.stopStage?.let(::JsonPrimitive) ?: JsonNull)
+                } } ?: JsonNull)
                 put("message", message?.let(::JsonPrimitive) ?: JsonNull)
                 put("elapsedMs", snapshot.elapsedMs)
                 put("remainingMs", snapshot.remainingMs?.let(::JsonPrimitive) ?: JsonNull)
@@ -284,7 +342,7 @@ object RuntimeModel {
                 put("speedControls", buildJsonObject { put("mode", snapshot.speedControls.mode.name); put("driveMinMps", snapshot.speedControls.driveMinMps); put("driveMaxMps", snapshot.speedControls.driveMaxMps); put("followRoadLimits", snapshot.speedControls.followRoadLimits) })
                 val motion = motionTelemetry(snapshot, phoneLocation.snapshot(SystemClock.elapsedRealtimeNanos()), phoneArmed)
                 put("motion", buildJsonObject { put("speedMps", motion.speedMps?.let(::JsonPrimitive) ?: JsonNull); put("sampleAgeMs", motion.sampleAgeMs?.let(::JsonPrimitive) ?: JsonNull); put("sampleSequence", motion.sampleSequence); put("placementGeneration", motion.placementGeneration); put("roadLimitMps", motion.roadLimitMps?.let(::JsonPrimitive) ?: JsonNull); put("roadLimitSource", motion.roadLimitSource); put("health", motion.health) })
-                put("nextStop", snapshot.nextStop?.let { target -> buildJsonObject { put("point", target.point.json()); put("label", target.label); put("index", target.index) } } ?: JsonNull)
+                put("nextStop", snapshot.nextStop?.let { target -> buildJsonObject { put("point", target.point.json()); put("label", target.label); put("index", target.index);put("kind",target.kind.name) } } ?: JsonNull)
                 put("radioRequest", radioRequest() ?: JsonNull)
                 if (includePhoneLocation) put("phoneLocation", phoneLocation.snapshot(SystemClock.elapsedRealtimeNanos())?.let { current -> buildJsonObject {
                     put("point", current.point.json()); put("source", current.source.name); put("ageMs", current.ageMs)

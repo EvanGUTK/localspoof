@@ -127,4 +127,22 @@ class WireJsonTest {
         assertEquals(13.9,dev.localspoof.domain.GraphRouter(mapped).route(GeoPoint(1.0,1.0),GeoPoint(1.0,1.001),Mode.DRIVE,20.0).mappedLimitAt(0.0)!!,0.0)
     }
 
+    @Test fun vacationRequiresExplicitStartAndTypedHotelDurationsSurviveWire() {
+        val body=wireJson.parseToJsonElement("""{"mode":"DRIVE","origin":{"lat":1,"lon":1},"destination":{"lat":1,"lon":1.002},"customPath":true,"vacation":{"tankLiters":50,"startingFuelLiters":10,"reserveLiters":5,"litersPer100Km":8,"fuelGrade":"REGULAR","currency":"USD"},"stops":[{"id":"hotel-1","point":{"lat":1,"lon":1.001},"label":"Hotel","kind":"HOTEL","hotel":{"checkInSeconds":600,"staySeconds":28800,"checkOutSeconds":300,"nights":1,"nightlyPrice":100,"currency":"USD"}}]}""").jsonObject
+        val parsed=parseRequest(body)
+        assertEquals(29700000L,parsed.stops.single().dwellMs)
+        assertEquals("hotel-1",parsed.stops.single().id)
+        assertNull(parsed.stops.single().hotel!!.knownCost)
+        assertEquals(10.0,parsed.vacation!!.startingFuelLiters,0.001)
+        val noStart=JsonObject(body+ ("vacation" to JsonObject(body.obj("vacation")-"startingFuelLiters")))
+        assertThrows(IllegalArgumentException::class.java) { parseRequest(noStart) }
+        val roundtrip=parseRequest(parsed.choicesJson())
+        assertEquals(parsed.stops,roundtrip.stops);assertEquals(parsed.vacation,roundtrip.vacation)
+    }
+    @Test fun remainingAirborneRequestCanOmitCompletedDepartureGeometryOnlyInRemainingParser() {
+        val body=wireJson.parseToJsonElement("""{"mode":"FLIGHT","origin":{"lat":1,"lon":1},"destination":{"lat":1,"lon":1.002},"routeSource":"FLIGHT_JOURNEY","onlineFlightRoutes":{"departureAirportId":"a","arrivalAirportId":"b","destinationGround":$onlineRoute}}""").jsonObject
+        assertThrows(IllegalArgumentException::class.java) { parseRequest(body) }
+        assertNull(parseRequest(body,remainingFlight=true).onlineFlightRoutes!!.originGround)
+    }
+
 }

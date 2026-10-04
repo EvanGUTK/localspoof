@@ -425,7 +425,15 @@ impl Network {
             .send()
             .map_err(|_| "ROUTING_UNAVAILABLE")?;
         if !response.status().is_success() {
-            return Err("ROUTING_UNAVAILABLE".into());
+            let status = response.status().as_u16();
+            let code = if status == 400 {
+                read_bounded(response, 65_536, "ROUTING_UNAVAILABLE")
+                    .map(|bytes| routing_http_error(status, &bytes))
+                    .unwrap_or("ROUTING_UNAVAILABLE")
+            } else {
+                "ROUTING_UNAVAILABLE"
+            };
+            return Err(code.into());
         }
         let bytes = read_bounded(response, MAX_ROUTE_BYTES, "ROUTE_TOO_COMPLEX")?;
         let json: Value = serde_json::from_slice(&bytes).map_err(|_| "INVALID_ROUTE_RESPONSE")?;
@@ -594,6 +602,151 @@ impl Network {
         );
         Ok(results)
     }
+    /// Official US vehicle catalog, bounded and selected only by structured fields.
+    /// The response is kept in memory; no credentials, redirects, or arbitrary URLs.
+    pub fn vehicle_catalog(
+        &self,
+        resource: String,
+        year: Option<u16>,
+        make: Option<String>,
+        model: Option<String>,
+        id: Option<u32>,
+    ) -> Result<Value, String> {
+        let generation = self.generation.load(Ordering::Acquire);
+        let valid_text = |s: &Option<String>| {
+            s.as_ref()
+                .is_none_or(|s| !s.is_empty() && s.len() <= 160 && !s.chars().any(char::is_control))
+        };
+        if !valid_text(&make)
+            || !valid_text(&model)
+            || year.is_some_and(|y| !(1984..=2100).contains(&y))
+        {
+            return Err("INVALID_VEHICLE_SELECTION".into());
+        }
+        let path = match resource.as_str() {
+            "year" if year.is_none() && make.is_none() && model.is_none() && id.is_none() => {
+                "vehicle/menu/year".to_owned()
+            }
+            "make" if year.is_some() && make.is_none() && model.is_none() && id.is_none() => {
+                "vehicle/menu/make".to_owned()
+            }
+            "model" if year.is_some() && make.is_some() && model.is_none() && id.is_none() => {
+                "vehicle/menu/model".to_owned()
+            }
+            "options" if year.is_some() && make.is_some() && model.is_some() && id.is_none() => {
+                "vehicle/menu/options".to_owned()
+            }
+            "vehicle"
+                if year.is_none()
+                    && make.is_none()
+                    && model.is_none()
+                    && id.is_some_and(|i| (1..=1_000_000).contains(&i)) =>
+            {
+                format!("vehicle/{}", id.unwrap_or_default())
+            }
+            "prices" if year.is_none() && make.is_none() && model.is_none() && id.is_none() => {
+                "fuelprices".to_owned()
+            }
+            _ => return Err("INVALID_VEHICLE_SELECTION".into()),
+        };
+        self.search_gate.reserve()?;
+        if self.search_active.fetch_add(1, Ordering::AcqRel) >= 1 {
+            self.search_active.fetch_sub(1, Ordering::AcqRel);
+            return Err("NETWORK_BUSY".into());
+        }
+        let _slot = Slot(&self.search_active);
+        let mut parameters = Vec::new();
+        if let Some(year) = year {
+            parameters.push(("year", year.to_string()));
+        }
+        if let Some(make) = make {
+            parameters.push(("make", make));
+        }
+        if let Some(model) = model {
+            parameters.push(("model", model));
+        }
+        let response = self
+            .client()?
+            .get(format!("https://www.fueleconomy.gov/ws/rest/{path}"))
+            .query(&parameters)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .map_err(|_| "VEHICLE_CATALOG_UNAVAILABLE")?;
+        if !response.status().is_success() {
+            return Err("VEHICLE_CATALOG_UNAVAILABLE".into());
+        }
+        let bytes = read_bounded(response, 524_288, "VEHICLE_RESPONSE_TOO_LARGE")?;
+        let raw: Value = serde_json::from_slice(&bytes).map_err(|_| "INVALID_VEHICLE_RESPONSE")?;
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err("STALE_NETWORK_REQUEST".into());
+        }
+        if resource == "vehicle" {
+            let keys = [
+                "id",
+                "year",
+                "make",
+                "model",
+                "comb08",
+                "city08",
+                "highway08",
+                "fuelType1",
+            ];
+            let record = raw.as_object().ok_or("INVALID_VEHICLE_RESPONSE")?;
+            Ok(Value::Object(
+                record
+                    .iter()
+                    .filter(|(k, v)| {
+                        keys.contains(&k.as_str())
+                            && (v.is_number()
+                                || v.as_str().is_some_and(|s| {
+                                    s.len() <= 200 && !s.chars().any(char::is_control)
+                                }))
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ))
+        } else if resource == "prices" {
+            let record = raw.as_object().ok_or("INVALID_VEHICLE_RESPONSE")?;
+            Ok(Value::Object(
+                record
+                    .iter()
+                    .filter(|(k, v)| {
+                        ["regular", "midgrade", "premium", "diesel"].contains(&k.as_str())
+                            && (v.is_number()
+                                || v.as_str()
+                                    .is_some_and(|s| s.len() <= 20 && s.parse::<f64>().is_ok()))
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ))
+        } else {
+            let raw_items = raw.get("menuItem").ok_or("INVALID_VEHICLE_RESPONSE")?;
+            let items: Vec<&Value> = if let Some(items) = raw_items.as_array() {
+                if items.len() > 2000 {
+                    return Err("VEHICLE_RESPONSE_TOO_LARGE".into());
+                }
+                items.iter().collect()
+            } else {
+                vec![raw_items]
+            };
+            Ok(Value::Array(
+                items
+                    .into_iter()
+                    .filter_map(|item| {
+                        let text = item.get("text")?.as_str()?;
+                        let value = item.get("value")?.as_str()?;
+                        if text.len() > 200
+                            || value.len() > 160
+                            || text.chars().chain(value.chars()).any(char::is_control)
+                        {
+                            return None;
+                        }
+                        Some(serde_json::json!({"text":text,"value":value}))
+                    })
+                    .collect(),
+            ))
+        }
+    }
     /// Clearing never resets rate limits: repeated Clear actions cannot bypass
     /// a provider's request budget. Late responses cannot repopulate caches.
     pub fn clear(&self) -> Result<(), String> {
@@ -658,6 +811,21 @@ fn decode_search(value: &Value, provider: &str) -> Result<Vec<Place>, String> {
     }
     Ok(results)
 }
+/// Decode only documented OSRM routing failures. Provider messages never enter UI errors.
+fn routing_http_error(status: u16, body: &[u8]) -> &'static str {
+    if status != 400 || body.len() > 65_536 {
+        return "ROUTING_UNAVAILABLE";
+    }
+    match serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_owned))
+        .as_deref()
+    {
+        Some("NoSegment" | "NoRoute") => "NO_ROUTE",
+        _ => "ROUTING_UNAVAILABLE",
+    }
+}
+
 fn read_bounded(input: impl Read, limit: usize, error: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     input
@@ -990,6 +1158,30 @@ fn decode_posted_limits(json: &Value, points: &[Point]) -> Result<Vec<Option<f64
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn routing_http_errors_distinguish_unroutable_endpoints_without_leaking_messages() {
+        for code in ["NoSegment", "NoRoute"] {
+            let body = serde_json::to_vec(
+                &serde_json::json!({"code":code,"message":"sensitive provider details"}),
+            )
+            .unwrap();
+            assert_eq!(routing_http_error(400, &body), "NO_ROUTE");
+            assert_eq!(routing_http_error(404, &body), "ROUTING_UNAVAILABLE");
+            assert_eq!(routing_http_error(500, &body), "ROUTING_UNAVAILABLE");
+        }
+        for body in [
+            b"<html>gateway error</html>".as_slice(),
+            b"{\"code\":\"InvalidQuery\",\"message\":\"private\"}".as_slice(),
+            b"{\"code\":null}".as_slice(),
+            b"[]".as_slice(),
+        ] {
+            assert_eq!(routing_http_error(400, body), "ROUTING_UNAVAILABLE");
+        }
+        let mut oversized = b"{\"code\":\"NoSegment\"}".to_vec();
+        oversized.resize(65_537, b' ');
+        assert_eq!(routing_http_error(400, &oversized), "ROUTING_UNAVAILABLE");
+    }
+
     #[test]
     #[ignore = "Explicit public provider qualification; requires internet"]
     fn public_berlin_road_preview_keeps_verified_posted_limits() {

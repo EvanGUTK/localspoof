@@ -57,6 +57,135 @@ fn choice(value: &Value, choices: &[&str]) -> bool {
     value.as_str().is_some_and(|v| choices.contains(&v))
 }
 
+fn currency(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|v| v.len() == 3 && v.bytes().all(|b| b.is_ascii_uppercase()))
+}
+fn vacation(value: &Value) -> bool {
+    let Some(v) = value.as_object() else {
+        return false;
+    };
+    let Some(tank) = v.get("tankLiters").and_then(Value::as_f64) else {
+        return false;
+    };
+    v.keys().all(|k| {
+        [
+            "tankLiters",
+            "startingFuelLiters",
+            "reserveLiters",
+            "litersPer100Km",
+            "fuelGrade",
+            "currency",
+            "fuelPricePerLiter",
+        ]
+        .contains(&k.as_str())
+    }) && number(&v["tankLiters"], 0.1, 2000.0)
+        && v.get("startingFuelLiters")
+            .is_some_and(|x| number(x, 0.0, tank))
+        && v.get("reserveLiters").is_some_and(|x| number(x, 0.0, tank))
+        && v.get("litersPer100Km")
+            .is_some_and(|x| number(x, 0.1, 200.0))
+        && v.get("fuelGrade")
+            .is_some_and(|x| choice(x, &["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"]))
+        && v.get("currency").is_some_and(currency)
+        && v.get("fuelPricePerLiter")
+            .is_none_or(|x| number(x, 0.0, 1000.0))
+}
+fn trip_stop(value: &Value) -> bool {
+    let Some(v) = value.as_object() else {
+        return false;
+    };
+    if !v.keys().all(|k| {
+        [
+            "point",
+            "dwellSeconds",
+            "label",
+            "id",
+            "kind",
+            "fuel",
+            "hotel",
+        ]
+        .contains(&k.as_str())
+    }) || !v.get("point").is_some_and(point)
+        || !v
+            .get("dwellSeconds")
+            .is_some_and(|x| number(x, 0.0, 2_764_800.0))
+        || !v
+            .get("kind")
+            .is_none_or(|x| choice(x, &["PLACE", "FUEL", "HOTEL"]))
+        || !v.get("label").is_none_or(|x| text(x, 120, true))
+        || !v.get("id").is_none_or(|x| {
+            x.as_str().is_some_and(|s| {
+                !s.is_empty()
+                    && s.len() <= 128
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
+        })
+    {
+        return false;
+    }
+    match v.get("kind").and_then(Value::as_str).unwrap_or("PLACE") {
+        "PLACE" => {
+            !v.contains_key("fuel")
+                && !v.contains_key("hotel")
+                && number(&v["dwellSeconds"], 0.0, 3600.0)
+        }
+        "FUEL" => {
+            !v.contains_key("hotel")
+                && number(&v["dwellSeconds"], 0.0, 3600.0)
+                && v.get("fuel").and_then(Value::as_object).is_some_and(|f| {
+                    f.keys().all(|k| {
+                        ["refillTargetLiters", "pricePerLiter", "currency"].contains(&k.as_str())
+                    }) && f
+                        .get("refillTargetLiters")
+                        .is_some_and(|x| number(x, 0.1, 2000.0))
+                        && f.get("pricePerLiter")
+                            .is_none_or(|x| number(x, 0.0, 1000.0))
+                        && f.get("currency").is_none_or(currency)
+                })
+        }
+        "HOTEL" => {
+            !v.contains_key("fuel")
+                && v.get("hotel").and_then(Value::as_object).is_some_and(|h| {
+                    h.keys().all(|k| {
+                        [
+                            "checkInSeconds",
+                            "staySeconds",
+                            "checkOutSeconds",
+                            "nights",
+                            "nightlyPrice",
+                            "fees",
+                            "currency",
+                        ]
+                        .contains(&k.as_str())
+                    }) && h
+                        .get("checkInSeconds")
+                        .is_some_and(|x| number(x, 0.0, 86400.0))
+                        && h.get("staySeconds")
+                            .is_some_and(|x| number(x, 0.0, 2_592_000.0))
+                        && h.get("checkOutSeconds")
+                            .is_some_and(|x| number(x, 0.0, 86400.0))
+                        && h.get("nights")
+                            .is_some_and(|x| x.as_u64().is_some_and(|n| n <= 365))
+                        && h.get("nightlyPrice")
+                            .is_none_or(|x| number(x, 0.0, 1_000_000.0))
+                        && h.get("fees").is_none_or(|x| number(x, 0.0, 1_000_000.0))
+                        && h.get("currency").is_some_and(currency)
+                        && (v["dwellSeconds"].as_f64().unwrap_or(-1.0)
+                            - ["checkInSeconds", "staySeconds", "checkOutSeconds"]
+                                .iter()
+                                .map(|k| h[*k].as_f64().unwrap_or(f64::NAN))
+                                .sum::<f64>())
+                        .abs()
+                            < 1e-6
+                })
+        }
+        _ => false,
+    }
+}
+
 pub fn validate_item(item: &Value) -> Result<(), String> {
     let object = item.as_object().ok_or_else(invalid)?;
     for (key, valid) in [
@@ -113,19 +242,12 @@ pub fn validate_item(item: &Value) -> Result<(), String> {
             "waypoints" => value
                 .as_array()
                 .is_some_and(|a| a.len() <= 32 && a.iter().all(point)),
-            "stops" => value.as_array().is_some_and(|a| {
-                a.len() <= 32
-                    && a.iter().all(|stop| {
-                        stop.as_object().is_some_and(|v| {
-                            v.keys()
-                                .all(|k| ["point", "dwellSeconds", "label"].contains(&k.as_str()))
-                                && v.get("point").is_some_and(point)
-                                && v.get("dwellSeconds")
-                                    .is_some_and(|d| number(d, 0.0, 3600.0))
-                                && v.get("label").is_none_or(|l| text(l, 120, true))
-                        })
-                    })
-            }),
+            "stops" => value
+                .as_array()
+                .is_some_and(|a| a.len() <= 32 && a.iter().all(trip_stop)),
+            "vacation" => {
+                vacation(value) && object.get("mode").and_then(Value::as_str) == Some("DRIVE")
+            }
             "customPath" => value.is_boolean(),
             "stopDwellSeconds" | "dwellSeconds" => number(value, 0.0, 3600.0),
             "flightDurationSeconds" => number(value, 1.0, 86400.0),
@@ -139,10 +261,30 @@ pub fn validate_item(item: &Value) -> Result<(), String> {
             return Err(invalid());
         }
     }
-    let base_speed = object
-        .get("speedMps")
-        .and_then(Value::as_f64)
-        .unwrap_or(if object.get("mode").and_then(Value::as_str) == Some("WALK") { 1.4 } else { 13.9 });
+    if object
+        .get("stops")
+        .and_then(Value::as_array)
+        .is_some_and(|stops| {
+            stops.iter().any(|stop| {
+                stop.get("kind").and_then(Value::as_str) == Some("FUEL")
+                    && !object.get("vacation").is_some_and(|v| {
+                        stop.pointer("/fuel/refillTargetLiters")
+                            .and_then(Value::as_f64)
+                            .zip(v.get("tankLiters").and_then(Value::as_f64))
+                            .is_some_and(|(target, tank)| target <= tank)
+                    })
+            })
+        })
+    {
+        return Err(invalid());
+    }
+    let base_speed = object.get("speedMps").and_then(Value::as_f64).unwrap_or(
+        if object.get("mode").and_then(Value::as_str) == Some("WALK") {
+            1.4
+        } else {
+            13.9
+        },
+    );
     let drive_min = object
         .get("driveMinMps")
         .and_then(Value::as_f64)
@@ -390,6 +532,17 @@ mod tests {
             TEMP_ID.fetch_add(1, Ordering::Relaxed)
         )))
     }
+    #[test]
+    fn typed_vacation_stops_preserve_estimates_but_reject_unknown_metadata() {
+        let mut route = json!({"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"Trip","group":"","kind":"ROUTE","origin":{"lat":0,"lon":0},"destination":{"lat":0,"lon":1},"mode":"DRIVE","vacation":{"tankLiters":60,"startingFuelLiters":30,"reserveLiters":5,"litersPer100Km":8,"fuelGrade":"DIESEL","currency":"EUR"},"stops":[{"id":"fuel-1","point":{"lat":0,"lon":0.5},"kind":"FUEL","dwellSeconds":300,"fuel":{"refillTargetLiters":55,"pricePerLiter":1.8,"currency":"EUR"}},{"id":"hotel-1","point":{"lat":0,"lon":0.7},"kind":"HOTEL","dwellSeconds":43800,"hotel":{"checkInSeconds":300,"staySeconds":43200,"checkOutSeconds":300,"nights":1,"currency":"EUR"}}]});
+        assert!(validate_item(&route).is_ok());
+        route["stops"][0]["fuel"]["refillTargetLiters"] = json!(70);
+        assert!(validate_item(&route).is_err());
+        route["stops"][0]["fuel"]["refillTargetLiters"] = json!(55);
+        route["stops"][1]["hotel"]["token"] = json!("private");
+        assert!(validate_item(&route).is_err());
+    }
+
     #[test]
     fn loading_without_save_does_not_create_a_profile() {
         let store = store();

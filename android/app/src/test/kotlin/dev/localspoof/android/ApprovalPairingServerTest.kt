@@ -55,8 +55,8 @@ class ApprovalPairingServerTest {
     }
     @Test fun helloAdvertisesApprovalPairingWithoutRequiringAnyCopiedSecret() {
         val hello = server.dispatch(envelope("Hello"), channel, deadline).obj("payload")
-        assertEquals(5L, hello.long("protocolMinor"))
-        for(flag in listOf("motionTelemetry","variableCruise","mappedRoadLimits")) assertTrue(hello[flag]!!.jsonPrimitive.boolean)
+        assertEquals(6L, hello.long("protocolMinor"))
+        for(flag in listOf("motionTelemetry","variableCruise","mappedRoadLimits","remainingJourneyEdits","timedPause","vacationStops","hotelStages")) assertTrue(hello[flag]!!.jsonPrimitive.boolean)
         assertTrue(hello["approvalPairing"]!!.jsonPrimitive.boolean)
         assertTrue(hello["livePhoneLocation"]!!.jsonPrimitive.boolean)
         assertTrue(hello["flightLegOptions"]!!.jsonPrimitive.boolean)
@@ -244,6 +244,24 @@ class ApprovalPairingServerTest {
         assertTrue(RuntimeModel.view.value.desktopEnabled);assertEquals(newGeneration,RuntimeModel.controllerGeneration)
         assertEquals(before,RuntimeModel.coordinator.snapshot())
         assertNull(RuntimeModel.lease.token()) // A recovered socket never manufactures approval.
+    }
+
+    @Test fun remainingEditCommandsNeverDiscloseActivityBeforeAuthorization() {
+        for(type in listOf("BeginRemainingEdit","PrepareRemainingPlan","ApplyRemainingPlan","CancelRemainingEdit","TimedPause","LeaveStop")) {
+            assertPublicRejection(server.dispatch(envelope(type,minor=6),channel,deadline),"UNAUTHORIZED")
+        }
+    }
+    @Test fun remainingCapabilitiesAreMinorGatedAndSnapshotKeepsApprovedGeometry() {
+        val token=approve()
+        val request=dev.localspoof.domain.PlanRequest(dev.localspoof.domain.Mode.DRIVE,GeoPoint(1.0,1.0),GeoPoint(1.0,1.001),customPath=listOf(GeoPoint(1.0,1.0),GeoPoint(1.0,1.001)))
+        RuntimeModel.commit(RuntimeModel.prepare(request).id)
+        val active=RuntimeModel.view.value.snapshot.activePreview
+        RuntimeModel.prepare(request.copy(destination=GeoPoint(1.0,1.002),customPath=listOf(request.origin,GeoPoint(1.0,1.002))))
+        assertEquals(active,RuntimeModel.view.value.snapshot.activePreview)
+        val read=server.dispatch(envelope("Snapshot",token=token,sequence=1,minor=6),channel,deadline).obj("payload")
+        assertNotNull(read["activePreview"]);assertNotNull(read["activeChoices"])
+        assertEquals("COMMAND_REJECTED",server.dispatch(envelope("BeginRemainingEdit",token=token,sequence=2,minor=5),channel,deadline).str("error"))
+        assertEquals("COMMAND_REJECTED",server.dispatch(envelope("TimedPause",buildJsonObject{put("durationSeconds",60)},token,3,minor=5),channel,deadline).str("error"))
     }
 
 }

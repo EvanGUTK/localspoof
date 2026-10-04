@@ -124,7 +124,7 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
         if (kind !in setOf("Hello", "Capabilities", "PairRequest", "PollPair") &&
             listOf("token", "sessionId").any { envelope[it] == null || envelope[it] is JsonNull }) return publicResponse("UNAUTHORIZED")
         if (kind == "ImportGeoPack" || kind == "CommitGeoPack") return dispatchResource(envelope, channelId)
-        if (envelope["type"]?.jsonPrimitive?.content != "PreparePlan") return dispatchLocked(envelope, channelId, channelExpiresAt)
+        if (envelope["type"]?.jsonPrimitive?.content !in setOf("PreparePlan","PrepareRemainingPlan")) return dispatchLocked(envelope, channelId, channelExpiresAt)
         // Core planning releases its own mutation lock. Local Stop can cancel it immediately.
         var cached: JsonObject? = null
         val accepted = synchronized(RuntimeModel.lock) {
@@ -150,13 +150,18 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
         }
         if (!accepted) return cached ?: publicResponse("UNAUTHORIZED")
         val response = boundedResponse(try {
-            val payload = envelope.obj("payload")
+            val rawPayload = envelope.obj("payload")
+            val isRemaining=envelope.str("type")=="PrepareRemainingPlan"
+            require(!isRemaining || envelope.long("protocolMinor")>=6 && rawPayload.keys==setOf("editId","request")) { "UNSUPPORTED_PROTOCOL" }
+            val payload=if(isRemaining) rawPayload.obj("request") else rawPayload
+            require(envelope.long("protocolMinor")>=6 || "vacation" !in payload && payload["stops"]?.jsonArray?.none { it.jsonObject.keys.any { key -> key in setOf("kind","fuel","hotel") } } != false) { "UNSUPPORTED_PROTOCOL" }
             val mappedEdges = payload["onlineRoute"]?.takeUnless { it is JsonNull }?.jsonObject?.containsKey("edgeSpeedLimits") == true ||
                 payload["onlineFlightRoutes"]?.takeUnless { it is JsonNull }?.jsonObject?.let { legs ->
                     listOf("originGround", "destinationGround").any { key -> legs[key]?.takeUnless { it is JsonNull }?.jsonObject?.containsKey("edgeSpeedLimits") == true }
                 } == true
             require(envelope.long("protocolMinor") >= 5 || payload.keys.none { it in setOf("drivingSpeedMode", "driveMinMps", "driveMaxMps", "followRoadLimits") } && !mappedEdges) { "UNSUPPORTED_PROTOCOL" }
-            val prepared = RuntimeModel.prepare(parseRequest(payload), envelope.long("expectedRevision"), payload["radioPolicy"]?.jsonPrimitive?.content ?: "MANUAL")
+            val prepared = if(isRemaining) RuntimeModel.prepareRemaining(rawPayload.str("editId"),parseRequest(payload,remainingFlight=true),envelope.long("expectedRevision"))
+                else RuntimeModel.prepare(parseRequest(payload), envelope.long("expectedRevision"), payload["radioPolicy"]?.jsonPrimitive?.content ?: "MANUAL")
             RuntimeModel.response(payload = buildJsonObject { put("preparedId", prepared.id); put("preview", prepared.preview.json()) })
         } catch (_: Exception) { RuntimeModel.response("PLAN_PREPARATION_REJECTED") })
         synchronized(RuntimeModel.lock) {
@@ -245,7 +250,7 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
         lease.expire(now)
         when (type) {
             "Hello", "Capabilities" -> return@synchronized publicResponse(payload = buildJsonObject {
-                put("protocolMajor", 1); put("protocolMinor", 5)
+                put("protocolMajor", 1); put("protocolMinor", 6)
                 put("frameworkMock", true); put("fusedMock", false)
                 put("guidedAirplane", true); put("usbAirplane", false)
                 put("maxFrameBytes", MAX_FRAME); put("maxPackBytes", MAX_PACK)
@@ -255,6 +260,7 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
                 put("approvalPairing", true)
                 put("livePhoneLocation", true); put("flightLegOptions", true)
                 put("liveJourneyControls", true); put("routeStops", true)
+                put("remainingJourneyEdits",true);put("timedPause",true);put("vacationFuelStops",true);put("vacationStops",true);put("hotelStages",true);put("vacationCorrections",true)
             })
             "PairRequest" -> {
                 if (envelope.long("protocolMinor") < 2) return@synchronized publicResponse("UNSUPPORTED_PROTOCOL")
@@ -291,12 +297,12 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
             return@synchronized when (type) {
                 "Snapshot" -> RuntimeModel.response(includePhoneLocation = true)
                 "Heartbeat" -> RuntimeModel.response()
-                "SetSpeeds", "JumpToNextStop" -> RuntimeModel.response(response["error"]?.jsonPrimitive?.content)
+                "SetSpeeds", "JumpToNextStop", "ApplyRemainingPlan", "CancelRemainingEdit", "TimedPause", "LeaveStop", "UpdateVacation" -> RuntimeModel.response(response["error"]?.jsonPrimitive?.content)
                 else -> response
             }
         }
         if (!lease.authorize(token, channelId, envelope.long("sequence"), now)) return@synchronized RuntimeModel.response("STALE_SEQUENCE")
-        val mutations = setOf("PreparePlan", "CommitPlan", "Start", "Pause", "Resume", "Stop", "RadioPhaseResult", "ImportGeoPack", "BeginGeoPack", "GeoPackChunk", "CommitGeoPack", "SetSpeeds", "JumpToNextStop")
+        val mutations = setOf("PreparePlan", "CommitPlan", "Start", "Pause", "Resume", "Stop", "RadioPhaseResult", "ImportGeoPack", "BeginGeoPack", "GeoPackChunk", "CommitGeoPack", "SetSpeeds", "JumpToNextStop", "BeginRemainingEdit", "PrepareRemainingPlan", "ApplyRemainingPlan", "CancelRemainingEdit", "TimedPause", "LeaveStop", "UpdateVacation")
         if (type in mutations && type != "Stop" && envelope.long("expectedRevision") != RuntimeModel.coordinator.snapshot().revision)
             return@synchronized RuntimeModel.response("STALE_REVISION")
         var terminate = false
@@ -304,6 +310,32 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
             when (type) {
                 "Snapshot" -> RuntimeModel.response(includePhoneLocation = true)
                 "Heartbeat" -> RuntimeModel.response()
+                "BeginRemainingEdit" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.keys.all { it=="useUndo" }) { "UNSUPPORTED_PROTOCOL" }
+                    val useUndo=payload["useUndo"]?.let { require(!it.jsonPrimitive.isString);it.jsonPrimitive.boolean } ?: false
+                    val context=RuntimeModel.beginRemainingEdit(useUndo,envelope.long("expectedRevision"),fromDesktop=true)
+                    RuntimeModel.response(payload=RuntimeModel.editContextJson(context))
+                }
+                "ApplyRemainingPlan" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.keys==setOf("editId","preparedId")) { "UNSUPPORTED_PROTOCOL" }
+                    RuntimeModel.applyRemaining(payload.str("editId"),payload.str("preparedId"),envelope.long("expectedRevision"));RuntimeModel.response()
+                }
+                "CancelRemainingEdit" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.keys==setOf("editId")) { "UNSUPPORTED_PROTOCOL" }
+                    RuntimeModel.cancelRemaining(payload.str("editId"),envelope.long("expectedRevision"));RuntimeModel.response()
+                }
+                "TimedPause" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.keys==setOf("durationSeconds")) { "UNSUPPORTED_PROTOCOL" }
+                    RuntimeModel.timedPause(payload.long("durationSeconds"),envelope.long("expectedRevision"));RuntimeModel.response()
+                }
+                "UpdateVacation" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.isNotEmpty() && payload.keys.all { it in setOf("remainingFuelLiters","litersPer100Km","reserveLiters") } && payload.values.none { it is JsonNull }) { "UNSUPPORTED_PROTOCOL" }
+                    RuntimeModel.updateVacation(payload.optionalNumber("remainingFuelLiters"),payload.optionalNumber("litersPer100Km"),payload.optionalNumber("reserveLiters"),envelope.long("expectedRevision"));RuntimeModel.response()
+                }
+                "LeaveStop" -> {
+                    require(envelope.long("protocolMinor")>=6 && payload.isEmpty()) { "UNSUPPORTED_PROTOCOL" }
+                    RuntimeModel.leaveStop(envelope.long("expectedRevision"));RuntimeModel.response()
+                }
                 "CommitPlan" -> { RuntimeModel.commit(payload.str("preparedId"), envelope.long("expectedRevision")); RuntimeModel.response() }
                 "Start" -> {
                     if (RuntimeModel.view.value.snapshot.state.name == "READY" && RuntimeModel.view.value.providerHealth == "NOT_PREPARED")
@@ -361,13 +393,20 @@ class PhoneControlServer(private val observeAirplane: () -> Boolean, private val
                 }
                 else -> RuntimeModel.response("UNKNOWN_COMMAND")
             }
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
             if (type.contains("GeoPack")) transfer = null
-            RuntimeModel.response(if (type == "Start") "PHONE_START_REQUIRED" else "COMMAND_REJECTED")
+            val safeCodes=setOf("CONFIRMED_LOCATION_REQUIRED","CONFIRMED_LOCATION_STALE","EDIT_NOT_AVAILABLE","EDIT_IN_PROGRESS","STALE_EDIT","HOTEL_STOP_NOT_AVAILABLE","CHECKOUT_ALREADY_STARTED","USE_REMAINING_EDIT","INVALID_REMAINING_FUEL","FUEL_RESERVE_EXHAUSTED","UNREACHABLE_FUEL_STOP","VACATION_UPDATE_NOT_AVAILABLE","INVALID_REFILL_TARGET")
+            RuntimeModel.response(if (type == "Start") "PHONE_START_REQUIRED" else failure.message?.takeIf { it in safeCodes } ?: "COMMAND_REJECTED")
         }
         if (!terminate) {
+            if(type in setOf("ApplyRemainingPlan","CancelRemainingEdit") && response["ok"]?.jsonPrimitive?.boolean==true) {
+                for((key,value) in acknowledgments.toMap()) {
+                    val cachedPayload=value.second["payload"]?.takeUnless { it is JsonNull }?.jsonObject
+                    if(cachedPayload?.containsKey("editId")==true || cachedPayload?.containsKey("preparedId")==true) acknowledgments[key]=value.first to publicResponse("STALE_EDIT")
+                }
+            }
             // Never keep historical device locations or stale ages in the acknowledgment cache.
-            cache(commandId, fingerprint, if (type in setOf("Snapshot", "Heartbeat", "SetSpeeds", "JumpToNextStop")) publicResponse(response["error"]?.jsonPrimitive?.content) else response)
+            cache(commandId, fingerprint, if (type in setOf("Snapshot", "Heartbeat", "SetSpeeds", "JumpToNextStop", "ApplyRemainingPlan", "CancelRemainingEdit", "TimedPause", "LeaveStop", "UpdateVacation")) publicResponse(response["error"]?.jsonPrimitive?.content) else response)
         } else {
             // The acknowledgment is sent by handle before the service closes the socket.
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopService() }, 100)
