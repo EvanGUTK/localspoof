@@ -1,5 +1,7 @@
 # LocalSpoof 0.6 handoff for GPT-6.1 Sol
 
+**Next work session:** read [104WORK](104WORK.md) first. It records newly reported Android map-return and missing usable Follow defects, dot/route-line alignment, continuous destination/airport edits, all seven selected usability additions and gas-only Vacation planning with starting fuel/range, station stops, MPG, hotel budgets and cost/ETA UI for both apps. EV charging and sensor spoofing remain deferred. This documentation update does not implement or qualify those items; begin tomorrow with map reliability and Follow/alignment. The handoff is intended for private GitHub/laptop continuation.
+
 Final Workmode artifacts are installed: the S24 signed APK and Windows bundled companion match SHA-256 `a7cd7bd42bc4d839b1eb503be8b0450c169db1aedc780c7b3877382286aa0308`. The per-user Windows upgrade/opening passed; phone playback is stopped and USB control enabled. Temporary sensor QA app/profile removed, original Sensors Off ON and airplane mode OFF preserved. See [current motion handoff](MOTION_SPEED_FLIGHT_HANDOFF_SOL_6_1.md) and [installed identity](../.build/motion/final-install-result.json).
 
 ## Workmode implementation and qualification — 2026-10-03
@@ -70,7 +72,7 @@ UI Automator verified the final secure APK gear menu includes Map, Connect, Jour
 
 Preserve the original release signing identity: certificate SHA-256 `862de591bf8bf3f8ae8e3109018fb5dfed0731d775c3acef0808c0cebdf46102`. Do not recreate/export the key or DPAPI password. Windows installer remains without an Authenticode publisher signature. Matching minor-4 APK and desktop are required.
 
-Root builds the Windows 0.6 bundle in `.build/windows/v06-target` so an open 0.5 executable is not force-closed. Use `release/LocalSpoof_0.6.0_x64-setup.exe` and `release/localspoof-0.6.0.apk`; hashes/sizes are in `release/artifacts.json` and `SHA256SUMS.txt`. No commits or publication are authorized/implied.
+Historical packaging used `.build/windows/v06-target` so an open 0.5 executable was not force-closed. Use `release/LocalSpoof_0.6.0_x64-setup.exe` and `release/localspoof-0.6.0.apk`; hashes/sizes are in `release/artifacts.json` and `SHA256SUMS.txt` on the original machine. That packaging instruction did not imply publication. The user subsequently authorized the private GitHub source repository and this documentation push; release binaries and signing material remain excluded.
 
 ## Review and remaining qualification
 

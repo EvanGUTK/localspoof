@@ -1,5 +1,7 @@
 # LocalSpoof
 
+For the next development session, start with [104WORK — usability, gas Vacation and map fixes](docs/104WORK.md). It records the selected future scope and unresolved user-reported defects; these additions are not implemented yet.
+
 Source and handoffs are maintained in the private [EvanGUTK/localspoof](https://github.com/EvanGUTK/localspoof) repository. Build caches, local device-test evidence under `.build/`, generated installers/APKs under `release/`, and signing material are excluded from Git. Documentation links to those local receipts work in the development workspace; the receipts are not uploaded. Keep the existing Android signing key backed up separately for compatible future updates.
 
 Current Workmode motion update uses matching protocol minor 5. Speed gauge, smooth variable cruise through 125 MPH, optional mapped limits, tracking, flight guidance and Sensors Off help are implemented. Combined checks pass: 135 Node, 57 domain/143 Android app, TypeScript, Android lint/assemblies, Windows 26 shell/22 bridge and Clippy. Actual S24 mock-speed, 45-second cadence, brief screen-off, live edits, Pause/Resume and desktop-disconnect continuity passed. See [motion handoff](docs/MOTION_SPEED_FLIGHT_HANDOFF_SOL_6_1.md) for sensor qualifications and current artifact/installation status.
