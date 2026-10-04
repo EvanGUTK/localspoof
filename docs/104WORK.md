@@ -6,6 +6,8 @@ The user's two requested journey changes are **change destination during a route
 
 ## Start here tomorrow
 
+Before broader implementation, investigate the post-landing location update report below. Compare Android provider delivery with Life360 freshness; LocalSpoof's Live status alone does not qualify third-party receipt.
+
 1. Reproduce and fix the phone map disappearing after Settings or another screen, then returning to Map. Verify on the actual installed S24 app.
 2. Expose and qualify a visible phone Follow/recenter control, including returning to Map during playback; investigate dot/route-line alignment and the desktop map click that clears the active route while flight playback continues. Compare both apps.
 3. Implement phase-aware remaining-route edits for destination and airports, retaining progress and required radio gates.
@@ -14,6 +16,24 @@ The user's two requested journey changes are **change destination during a route
 6. Run focused regressions and independent review, then matching Android/Windows builds and real-device qualification. Update the handoff with actual evidence and limitations.
 
 This sequence prioritizes reliability before more map controls. Sensor spoofing, EV charging, live hotel booking/pricing and a hosted backend are outside this iteration.
+
+## Post-landing location updates — investigation required
+
+The user reports a Memphis → Nashville flight journey: Snapchat showed Nashville, while Life360 retained Memphis International or alternated between Memphis and the physical home location. Life360 displayed a roughly 30-minute-old update and refreshed only after reaching the hotel, rather than immediately after airplane mode was turned off at the arrival airport. These are user observations, not a reproduced diagnosis. A delayed refresh/upload, cached fixes, provider differences or a playback/radio-gate problem remain possibilities; do not prescribe a longer wait as the fix.
+
+Perform these useful checks during the next qualification session:
+
+- **LocalSpoof:** Does it still show **Live**, with fresh updates at Nashville, or **Paused/Stale/Error**? Check submitted-sample age/sequence, phase and any `RADIO_CHANGED` pause. Confirm airplane mode was restored at the actual restoration gate. Live establishes our successful provider submission, not Life360's receipt or server update.
+- **Life360:** An old **last updated** timestamp points toward refresh or connectivity trouble. A fresh timestamp with the wrong location warrants investigating which fixes it receives. Compare the timestamps with LocalSpoof's fresh submissions; Snapchat displaying a location is not proof of the other app's current source or cadence.
+- **After landing:** Confirm internet access works, then open Life360. Its official guidance calls for **Allow all the time**, **Precise location**, and battery optimization disabled. Check these settings without silently changing them. [Life360 permissions](https://support.life360.com/hc/en-us/articles/23053398402839-Life360-Permission-Settings), [location accuracy guidance](https://support.life360.com/hc/en-us/articles/23053384044311-Improve-Location-Accuracy).
+
+**Next engineering test:** compare fresh GPS, network and Google Fused Location readings before, during and after an actual airplane-mode transition, alongside the app phase, successful submitted fixes and user-observed Life360 timestamp. Distinguish a cached last-known reading from a fresh callback, and compare age, mock marker, coordinates and speed without treating a read request or successful injection as proof of consumer delivery. Inspect restoration-gate timing, genuine network recovery, any provider failures and the subsequent airport-to-hotel ground leg. Run the real radio transition only in a writable qualification session with the user's chosen journey and manually operated airplane-mode prompts; do not perform it as part of this documentation update.
+
+Current source submits framework GPS/network test-provider fixes and has no explicit Google Fused Location mock integration. That is a concrete investigation lead, not proof that Fused Location fails to receive framework mocks or that Life360 uses/rejects a particular API. Evaluate the supported Google mock path only if fresh consumer evidence justifies it; retain Android's mock marker and proper cleanup. [Google Fused Location API](https://developers.google.com/android/reference/com/google/android/gms/location/FusedLocationProviderClient).
+
+Keep diagnostic comparisons bounded and in RAM; do not introduce production activity logs, raw location histories, credentials or third-party account access. Report observed delivery/freshness and unresolved limitations separately. Isolate unrelated geographic tests in an emulator: prior Chicago qualification submitted system mock fixes on the actual S24, which other apps could retain. Do not publish unrelated test coordinates to the user's daily phone during this investigation.
+
+Life360 also showed flight activity. Its documented flight-detection conditions include airport proximity, speed above 100 MPH and airplane-mode transitions. Airplane mode is not a guarantee of unrecorded travel; restoring connectivity does not establish that no activity was detected offline. Treat this as a compatibility limitation, not a promise to suppress another app's history or classifications. [Life360 flight detection](https://support.life360.com/hc/en-us/articles/23053396597271-Flight-Detection-Landing-Notifications).
 
 ## User-reported phone defects — unresolved
 
@@ -218,6 +238,7 @@ Windows and Android should use the same actions and outcomes. When the desktop s
 20. Test compact Android/Windows cost/MPG/ETA summaries, accessible large font, narrow screens and input insets without obscuring the map or Stop. EV charging remains unavailable.
 21. Compare the actual submitted point, rendered dot and route geometry on both apps during road corners and flight legs; confirm alignment through navigation return, zoom, bearing, pitch and the antimeridian. An initial physical DEVICE dot outside a proposed route is not itself a simulation alignment failure.
 22. On a paired active flight, click elsewhere on the desktop map; verify the route remains visible and phone destination/phase stay unchanged. Repeat for Drive/Walk, paused/holding playback, airport picking, fuel/hotel edits and the phone map. Candidate previews stay separate; Cancel restores the active view, failure leaves it intact, and Apply switches only after the phone accepts. Late previews, Cancel, Stop and disconnect cannot restore an obsolete or unauthorized route.
+23. Qualify the actual airplane-mode transition and airport-to-hotel continuation with fresh GPS, network and Google Fused Location observations. Compare LocalSpoof phase/age/sequence with Life360's observed last-update time; distinguish stale delivery, connectivity/upload delay and fresh wrong fixes without asserting an unverified cause. Use only the user's chosen on-device journey, retain no raw activity history, and document flight-classification limitations independently of delivery correctness.
 
 ## Laptop continuation and what Git preserves
 
