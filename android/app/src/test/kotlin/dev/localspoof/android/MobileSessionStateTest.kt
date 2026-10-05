@@ -92,4 +92,27 @@ class MobileSessionStateTest {
         assertNull(state.draft.preparedId)
         assertFalse(state.draft.busy)
     }
+    @Test fun draftEditsAndStopCancelOwnedProviderRequestsWithoutAcceptingLateReplies() {
+        val state = MobileSessionState(); var cancelled = 0; state.attachPlanningCancellation { cancelled++ }
+        val old = state.beginPreparation(); state.edit(MobileField.DESTINATION_LAT, "10")
+        assertEquals(1, cancelled); assertFalse(state.acceptsPreparation(old))
+        state.clearActivity(); assertTrue(cancelled >= 2); assertFalse(state.draft.busy)
+    }
+    @Test fun phaseAdvanceLocksCompletedAirportsAndRetainsUnappliedDestination() {
+        val a = dev.localspoof.domain.GeoPoint(1.0, 2.0); val b = dev.localspoof.domain.GeoPoint(3.0, 4.0)
+        val request = dev.localspoof.domain.PlanRequest(Mode.FLIGHT, a, b, flight = dev.localspoof.domain.FlightOptions(originAirportId = "ORIG", destinationAirportId = "ARR"))
+        val state = MobileSessionState(); state.startRemainingEdit(MobileRemainingDraft(request, dev.localspoof.domain.FlightPhase.ORIGIN_GROUND))
+        state.draft = state.draft.copy(departureId = "candidate-origin", arrivalId = "candidate-arrival", destinationLat = "5", preparedId = "old")
+        state.refreshRemainingPhase(request, dev.localspoof.domain.FlightPhase.FLIGHT_INTERVAL)
+        assertEquals("ORIG", state.draft.departureId); assertEquals("candidate-arrival", state.draft.arrivalId); assertEquals("5", state.draft.destinationLat); assertNull(state.draft.preparedId)
+        state.refreshRemainingPhase(request, dev.localspoof.domain.FlightPhase.DESTINATION_GROUND)
+        assertEquals("ARR", state.draft.arrivalId); assertEquals("5", state.draft.destinationLat)
+    }
+    @Test fun userChangingAutomaticStationPinsItsFutureChoiceWhileOrdinaryStopIdentitySurvives() {
+        val stop = dev.localspoof.domain.RouteStop(dev.localspoof.domain.GeoPoint(1.0, 2.0), 300000, "Fuel", id = "auto_fuel_fixture")
+        val pinned = mobilePinAutomaticStop(stop)
+        assertTrue(pinned.id.startsWith("manual_")); assertEquals(stop.point, pinned.point); assertEquals(stop.dwellMs, pinned.dwellMs)
+        assertEquals(pinned, mobilePinAutomaticStop(pinned))
+    }
+
 }

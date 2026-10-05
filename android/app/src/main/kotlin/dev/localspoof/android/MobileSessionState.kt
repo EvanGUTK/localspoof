@@ -20,13 +20,17 @@ internal class MobileSessionState : ViewModel() {
     var settingsError by mutableStateOf<String?>(null)
     var remainingEdit by mutableStateOf<MobileRemainingDraft?>(null)
         private set
+    private var planningCancel: () -> Unit = {}
+    fun attachPlanningCancellation(callback: () -> Unit) { planningCancel = callback }
+    var candidateBudget by mutableStateOf<MobileVacationEstimate?>(null)
+    var vehicleCatalog by mutableStateOf(MobileVehicleUi())
     private var beforeEdit: MobileDraft? = null
     private var generation = 0L
     private var preparationSequence = 0L
     private var preparationOwner: Long? = null
     private var invalidWalkDefault = false
     private var invalidDriveDefault = false
-    fun invalidate() { generation++; draft = draft.copy(preparedId = null) }
+    fun invalidate() { candidateBudget = null; planningCancel(); generation++; draft = draft.copy(preparedId = null) }
     data class PreparationToken(val generation: Long, val owner: Long)
     fun beginPreparation(): PreparationToken {
         check(!draft.busy)
@@ -62,12 +66,20 @@ internal class MobileSessionState : ViewModel() {
             departureGroundMode = request.flight?.departureGroundMode ?: GroundLegMode.DRIVE, arrivalGroundMode = request.flight?.arrivalGroundMode ?: GroundLegMode.DRIVE,
             flightTransitMode = request.flight?.flightTransitMode ?: FlightTransitMode.TIMED, simulationOnly = request.flight?.simulationOnly ?: false,
             boardingHoldSeconds = ((request.flight?.boardingMs ?: 30000) / 1000).toString(),
-            stops = request.stops, customPath = false, preparedId = null, busy = false, speedError = null, flightSpeedError = null, drivingError = null,
+            stops = request.stops, automaticFuelStops = draft.automaticFuelStops || request.stops.any { it.id.startsWith("auto_fuel_") }, customPath = false, preparedId = null, busy = false, speedError = null, flightSpeedError = null, drivingError = null,
             drivingSpeedMode = controls.mode, driveMinMps = controls.driveMinMps, driveMaxMps = controls.driveMaxMps,
             driveMinText = mobileFormatSpeed(controls.driveMinMps, preferences.speedUnit), driveMaxText = mobileFormatSpeed(controls.driveMaxMps, preferences.speedUnit), followRoadLimits = controls.followRoadLimits,
             vacation = request.vacation?.let { MobileVacationDraft(enabled = true, metric = true, tank = it.tankLiters.toString(), consumption = it.litersPer100Km.toString(),
                 startingMethod = MobileFuelInput.AMOUNT, starting = it.startingFuelLiters.toString(), reserve = it.reserveLiters.toString(), grade = it.fuelGrade, price = it.fuelPricePerLiter?.toString() ?: "", currency = it.currency) } ?: MobileVacationDraft())
         section = MobileSection.JOURNEY
+    }
+    fun refreshRemainingPhase(choices: PlanRequest, phase: FlightPhase?) {
+        val current = remainingEdit ?: return
+        if (current.held != null || current.phase == phase) return
+        remainingEdit = current.copy(choices = choices, phase = phase)
+        draft = draft.copy(departureId = choices.flight?.originAirportId ?: draft.departureId,
+            arrivalId = if (phase in setOf(FlightPhase.ARRIVAL_PLACEMENT, FlightPhase.SETTLING, FlightPhase.RESTORE_CONNECTIVITY, FlightPhase.DESTINATION_GROUND, FlightPhase.DESTINATION_PLACEMENT, FlightPhase.COMPLETE)) choices.flight?.destinationAirportId ?: draft.arrivalId else draft.arrivalId,
+            preparedId = null)
     }
     fun attachEditHold(context: RemainingEditContext) { remainingEdit = remainingEdit?.copy(held = context) }
     fun releaseEditHold() { remainingEdit = remainingEdit?.copy(held = null) }

@@ -81,4 +81,21 @@ class MobilePresentationTest {
         val request = mobilePlanRequest(draft, current)
         assertEquals(current, request.origin); assertEquals(current, request.customPath!!.first()); assertEquals(stop.id, request.stops.single().id)
     }
+    @Test fun vacationPreviewIncludesRealDetoursStartingFuelAndSeparatesRefillCashFromConsumption() {
+        val a = dev.localspoof.domain.GeoPoint(0.0, 0.0); val station = dev.localspoof.domain.GeoPoint(0.0, 1.0); val hotel = dev.localspoof.domain.GeoPoint(0.0, 1.5); val destination = dev.localspoof.domain.GeoPoint(0.0, 2.0)
+        val points = (0..200).map { dev.localspoof.domain.GeoPoint(0.0, it / 100.0) }
+        val config = dev.localspoof.domain.VacationConfig(50.0, 20.0, 2.0, 10.0, dev.localspoof.domain.FuelGrade.REGULAR, fuelPricePerLiter = 1.5)
+        val stops = listOf(dev.localspoof.domain.RouteStop(station, 300000, "Fuel", dev.localspoof.domain.StopKind.FUEL, fuel = dev.localspoof.domain.FuelStop(40.0)),
+            dev.localspoof.domain.RouteStop(hotel, 60000, "Hotel", dev.localspoof.domain.StopKind.HOTEL, hotel = dev.localspoof.domain.HotelStop(0, 60000, 0, 1, 100.0, 10.0)))
+        val request = dev.localspoof.domain.PlanRequest(dev.localspoof.domain.Mode.DRIVE, a, destination, stops = stops, vacation = config, stopPointIndices = listOf(100, 150), onlineRoute = dev.localspoof.domain.OnlineRoute(dev.localspoof.domain.Mode.DRIVE, "Test", points))
+        val preview = dev.localspoof.domain.PlanPreview(dev.localspoof.domain.Mode.DRIVE, a, destination, 222390.0, 100000, geometry = points, stops = stops)
+        val result = mobileVacationEstimate(request, preview)!!
+        assertEquals(22.239, result.consumedLiters, .001); assertEquals(28.8805, result.finishFuelLiters, .001)
+        assertEquals(46.67925, result.refillCash!!, .002); assertEquals(33.3585, result.consumedValue!!, .002); assertEquals(110.0, result.hotels!!, 0.0)
+        val current = mobileVacationEstimate(request, preview, 15.0)!!
+        assertEquals(result.refillCash!! + 7.5, current.refillCash!!, .001)
+        val unknownHotel = request.copy(stops = listOf(stops.first(), stops.last().copy(hotel = stops.last().hotel!!.copy(fees = null))))
+        assertNull(mobileVacationEstimate(unknownHotel, preview)!!.hotels)
+    }
+
 }

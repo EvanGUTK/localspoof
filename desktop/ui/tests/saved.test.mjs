@@ -26,3 +26,10 @@ test('saved vacation routes retain typed stops and units-normalized config witho
  const route={id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',name:'Trip',group:'',kind:'ROUTE',origin:{lat:0,lon:0},destination:{lat:0,lon:1},mode:'DRIVE',vacation:{tankLiters:60,startingFuelLiters:30,reserveLiters:5,litersPer100Km:8,fuelGrade:'DIESEL',currency:'EUR'},stops:[{id:'fuel-1',point:{lat:0,lon:.5},kind:'FUEL',dwellSeconds:300,fuel:{refillTargetLiters:55,pricePerLiter:1.8,currency:'EUR'}},{id:'hotel-1',point:{lat:0,lon:.7},kind:'HOTEL',dwellSeconds:43800,hotel:{checkInSeconds:300,staySeconds:43200,checkOutSeconds:300,nights:1,currency:'EUR'}}]};
  const decoded=decodeSavedStore({version:1,items:[route]}).items[0];assert.deepEqual(decoded.vacation,route.vacation);assert.deepEqual(decoded.stops,route.stops);assert.throws(()=>decodeSavedStore({version:1,items:[{...route,ledger:{}}]}));assert.throws(()=>decodeSavedStore({version:1,items:[{...route,vacation:{...route.vacation,startingFuelLiters:70}}]}));
 });
+
+
+test('standalone route planning choices remain portable without runtime metadata',()=>{
+ const item={id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',name:'Standalone',group:'',kind:'ROUTE',origin:{lat:0,lon:0},destination:{lat:0,lon:1},mode:'DRIVE',planningSource:'ONLINE',automaticFuelStops:true};
+ const decoded=decodeSavedStore({version:1,items:[item]}).items[0];assert.equal(decoded.planningSource,'ONLINE');assert.equal(decoded.automaticFuelStops,true);
+ for(const bad of [{planningSource:'OTHER'},{automaticFuelStops:'true'},{phoneToken:'secret'}])assert.throws(()=>decodeSavedStore({version:1,items:[{...item,...bad}]}));
+});

@@ -73,6 +73,10 @@ pub enum NativeError {
     PhoneProtocolMismatch,
     ApkInstallFailed,
     ApkSignatureMismatch,
+    InvalidWirelessEndpoint,
+    WirelessTlsRequired,
+    WirelessPairingFailed,
+    WirelessConnectFailed,
 }
 
 impl NativeError {
@@ -103,6 +107,10 @@ impl NativeError {
             Self::PhoneProtocolMismatch => "PHONE_PROTOCOL_MISMATCH",
             Self::ApkInstallFailed => "APK_INSTALL_FAILED",
             Self::ApkSignatureMismatch => "APK_SIGNATURE_MISMATCH",
+            Self::InvalidWirelessEndpoint => "INVALID_WIRELESS_ENDPOINT",
+            Self::WirelessTlsRequired => "WIRELESS_TLS_REQUIRED",
+            Self::WirelessPairingFailed => "WIRELESS_PAIRING_FAILED",
+            Self::WirelessConnectFailed => "WIRELESS_CONNECT_FAILED",
         }
     }
 }
@@ -335,13 +343,16 @@ impl Adb {
     }
 
     pub fn device(&self, serial: &str, args: &[&str]) -> Result<String, NativeError> {
-        validate_serial(serial)?;
+        if validate_serial(serial).is_err() {
+            crate::wireless::WirelessEndpoint::parse(serial)?;
+        }
         let mut scoped = vec!["-s", serial];
         scoped.extend_from_slice(args);
         self.execute(&scoped, Duration::from_secs(10))
     }
 
     pub fn require_usb(&self, serial: &str) -> Result<(), NativeError> {
+        validate_serial(serial)?;
         let path = self.device(serial, &["get-devpath"])?;
         if is_usb_devpath(&path) {
             return Ok(());
@@ -365,11 +376,11 @@ impl Adb {
         Err(NativeError::UsbDeviceRequired)
     }
 
-    fn execute(&self, args: &[&str], timeout: Duration) -> Result<String, NativeError> {
+    pub(crate) fn execute(&self, args: &[&str], timeout: Duration) -> Result<String, NativeError> {
         self.execute_with_input(args, timeout, None)
     }
 
-    fn execute_with_input(
+    pub(crate) fn execute_with_input(
         &self,
         args: &[&str],
         timeout: Duration,
@@ -502,6 +513,7 @@ impl Adb {
     }
 
     pub fn airplane_state(&self, serial: &str) -> Result<bool, NativeError> {
+        validate_serial(serial)?;
         match self
             .device(serial, &["shell", "cmd", "connectivity", "airplane-mode"])?
             .trim()
@@ -513,6 +525,7 @@ impl Adb {
     }
 
     pub fn airplane_set(&self, serial: &str, enabled: bool) -> Result<(), NativeError> {
+        self.require_usb(serial)?;
         self.device(
             serial,
             &[
@@ -571,6 +584,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn wireless_os_pairing_code_uses_only_stdin_and_radio_rejects_network() {
+        let fixture=Fixture::new("if args==['version']:\n    print('Android Debug Bridge version synthetic')\nelif args==['pair','192.168.1.5:32000']:\n    assert sys.stdin.read()=='123456\\n'\n    print('Successfully paired to 192.168.1.5:32000')\nelse:\n    raise AssertionError('unexpected command or leaked code')");
+        let adb = Adb::new(&fixture.adb).unwrap();
+        adb.pair_wireless("192.168.1.5:32000", "123456").unwrap();
+        assert_eq!(
+            adb.airplane_set("192.168.1.5:32000", true),
+            Err(NativeError::InvalidDevice)
+        );
+        assert_eq!(
+            adb.require_usb("192.168.1.5:32000"),
+            Err(NativeError::InvalidDevice)
+        );
+        assert_eq!(
+            adb.pair_wireless("192.168.1.5:32000", "1234;6"),
+            Err(NativeError::WirelessPairingFailed)
+        );
+    }
     #[test]
     fn verified_bytes_survive_source_replacement_before_usb_validation() {
         let fixture = Fixture::new("");

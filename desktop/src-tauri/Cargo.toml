@@ -1,6 +1,6 @@
 [package]
 name = "localspoof-desktop"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 publish = false
 
@@ -8,6 +8,12 @@ publish = false
 tauri-build = { version = "=2.5.3", features = [] }
 
 [dependencies]
+tauri-plugin-updater = { version = "=2.9.0", path = "../vendor/tauri-plugin-updater", default-features=false, features= ["rustls-tls"] }
+base64 = "=0.22.1"
+ring = "=0.17.14"
+sha2 = "=0.10.9"
+semver = "=1.0.27"
+minisign-verify = "=0.2.4"
 tauri = { version = "=2.9.5", features = [] }
 # Tauri 2.9.5's runtime-wry requires this runtime interface, not the newer 2.12 API.
 tauri-runtime = "=2.9.2"

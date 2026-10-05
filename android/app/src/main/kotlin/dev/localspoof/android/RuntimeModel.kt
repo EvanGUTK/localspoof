@@ -26,6 +26,10 @@ data class PhoneView(
     val phoneLocation: PhoneLocation? = null,
     val motion: MotionTelemetry = MotionTelemetry(),
     val simulationArmed: Boolean = false,
+    val pendingUpdateRadioState: Boolean? = null,
+    val providerCleanupPending: Boolean = false,
+    val updateBlockReason: String? = null,
+    val updateInstallationPending: Boolean = false,
 )
 
 /** One process-owned coordinator; all active mutations use lock. No persistence or event history. */
@@ -52,6 +56,9 @@ object RuntimeModel {
     private var controllerOwnedEdit = false
     private var radioGeneration = 0L
     private var initialAirplaneAtStart: Boolean? = null
+    private var pendingUpdateRadioState: Boolean? = null
+    private var providerCleanupPending = false
+    private var updateInstallationPending = false
     var controllerGeneration: Long = 0L
         private set
     private val mutable = MutableStateFlow(PhoneView(coordinator.snapshot()))
@@ -65,7 +72,7 @@ object RuntimeModel {
             pairingRequestId = lease.pairingId.takeIf { lease.pending }, controllerApproved = lease.token() != null,
             providerHealth = provider?.health ?: "NOT_PREPARED",
             message = message, pack = pack, radioObserved = radio, preview = preview,
-            phoneLocation = currentLocation, motion = motionTelemetry(snapshot, currentLocation, phoneArmed), simulationArmed = phoneArmed)
+            phoneLocation = currentLocation, motion = motionTelemetry(snapshot, currentLocation, phoneArmed), simulationArmed = phoneArmed, pendingUpdateRadioState = pendingUpdateRadioState, providerCleanupPending = providerCleanupPending, updateBlockReason = updateBlockReasonLocked(), updateInstallationPending = updateInstallationPending)
     }
 
     fun configureResources(newPack: GeoPack? = pack, newAirports: List<Airport> = airports) {
@@ -91,6 +98,7 @@ object RuntimeModel {
     }
 
     fun commit(id: String, revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         coordinator.commit(id, revision)
         activeRadioPolicy = preparedRadioPolicies[id]; preparedRadioPolicies.clear(); radioGeneration++
         initialAirplaneAtStart = radio
@@ -114,6 +122,7 @@ object RuntimeModel {
         return prepared
     }
     fun applyRemaining(editId: String, preparedId: String, revision: Long = coordinator.snapshot().revision) = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         coordinator.applyRemaining(editId,preparedId,SystemClock.elapsedRealtime(),revision)
         controllerOwnedEdit=false;preview=null;preparedRadioPolicies.clear();message=null;publish()
     }
@@ -145,6 +154,7 @@ object RuntimeModel {
     }
 
     fun attach(adapter: FrameworkLocationProvider) = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         provider = adapter; serviceRunning = true; phoneLocation.attach(adapter); publish()
     }
     fun offerDeviceLocation(fix: DeviceLocationFix, expectedOwner: FrameworkLocationProvider) = synchronized(lock) {
@@ -156,6 +166,7 @@ object RuntimeModel {
     }
 
     fun enableDesktop() = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         if (!desktopEnabled) { controllerGeneration++; desktopEnabled = true; lease.enable() }
         if (message == "LOCAL_USB_SOCKET_UNAVAILABLE") message = null
         publish()
@@ -170,6 +181,7 @@ object RuntimeModel {
     }
 
     fun approveController(pairingId: String) = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         val approved = lease.approve(pairingId, SystemClock.elapsedRealtime()); publish(); approved
     }
     fun rejectController(pairingId: String) = synchronized(lock) {
@@ -178,6 +190,8 @@ object RuntimeModel {
 
     fun startFromPhone() = synchronized(lock) {
         try {
+            check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
+            check(pendingUpdateRadioState==null && !providerCleanupPending) { "RECOVERY_REQUIRED_BEFORE_START" }
             val adapter = provider ?: throw IllegalStateException("START_PHONE_SERVICE_FIRST")
             if (!phoneArmed) { phoneLocation.attach(adapter); phoneLocation.preparing(adapter) }
             adapter.prepare()
@@ -199,6 +213,7 @@ object RuntimeModel {
     }
 
     fun startFromDesktop() = synchronized(lock) {
+        check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
         check(phoneArmed && serviceRunning) { "PHONE_START_REQUIRED" }
         if (coordinator.snapshot().state == SessionState.READY) coordinator.start(SystemClock.elapsedRealtime())
         else check(coordinator.snapshot().state in setOf(SessionState.ACTIVE, SessionState.HOLDING)) { "NOT_READY" }
@@ -216,7 +231,7 @@ object RuntimeModel {
     }
 
     fun pause() = synchronized(lock) { coordinator.pause(); publish() }
-    fun resume() = synchronized(lock) { coordinator.resume(SystemClock.elapsedRealtime()); publish() }
+    fun resume() = synchronized(lock) { check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" };coordinator.resume(SystemClock.elapsedRealtime()); publish() }
 
     fun tick(radioEnabled: Boolean, expectedOwner: FrameworkLocationProvider) = synchronized(lock) {
         // Cancellation cannot interrupt a synchronous settings read in an old service coroutine.
@@ -259,12 +274,18 @@ object RuntimeModel {
         val stoppingSnapshot = coordinator.snapshot()
         val pendingUsbRadio = stoppingSnapshot.mode == Mode.FLIGHT && activeRadioPolicy == "USB" &&
             stoppingSnapshot.state in setOf(SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING, SessionState.ERROR)
-        val restoreRadio = coordinator.recoveryAirplaneState() != null
+        val recoveryRadio = coordinator.recoveryAirplaneState()
+        val restoreRadio = recoveryRadio != null
+        // Preserve recovery evidence across Stop, detach and repeated Stop calls. No radio mutation.
+        if (recoveryRadio != null) pendingUpdateRadioState = recoveryRadio
+        else if (pendingUsbRadio && pendingUpdateRadioState == null) pendingUpdateRadioState = initialAirplaneAtStart ?: false
         // Revoke control first so queued external commands cannot survive local Stop.
         controllerOwnedEdit=false;lease.revoke(); desktopEnabled = false; phoneArmed = false; phoneLocation.clear()
         coordinator.stop(); preview = null
         preparedRadioPolicies.clear(); activeRadioPolicy = null; initialAirplaneAtStart = null
-        val cleanupFailed = provider?.cleanup() == false
+        val cleanupResult = provider?.cleanup()
+        if (cleanupResult != null) providerCleanupPending = !cleanupResult
+        val cleanupFailed = providerCleanupPending
         message = when {
             cleanupFailed && pendingUsbRadio -> "CLEANUP_FAILED: reset mock providers. Check airplane mode manually in Android settings; an in-flight USB command may still finish."
             cleanupFailed && restoreRadio -> "CLEANUP_FAILED: reset mock providers and restore airplane mode manually in Android settings."
@@ -274,6 +295,54 @@ object RuntimeModel {
             message?.contains("airplane mode manually") == true -> message
             else -> null
         }
+        publish()
+    }
+
+    private fun desktopUpdateSafeLocked(ignoreInstall:Boolean=false): Boolean {
+        val snapshot=coordinator.snapshot()
+        return (ignoreInstall || !updateInstallationPending) && snapshot.state==SessionState.IDLE && !phoneArmed && snapshot.editId==null &&
+            snapshot.timedPauseRemainingMs==null && pendingUpdateRadioState==null && !providerCleanupPending &&
+            (provider==null || provider?.health in setOf("NOT_PREPARED","RELEASED"))
+    }
+    private fun updateBlockReasonLocked(includeInstall:Boolean=true): String? = when {
+        includeInstall && updateInstallationPending -> "Finish or cancel Android update confirmation before starting a journey."
+        pendingUpdateRadioState!=null -> "Confirm airplane mode has been restored to its original state."
+        providerCleanupPending -> "Reset mock providers before installing an update."
+        !desktopUpdateSafeLocked(ignoreInstall=!includeInstall) -> "Stop the journey and release mock location before installing an update."
+        serviceRunning || provider!=null || desktopEnabled || lease.token()!=null -> "Stop the phone service and disconnect desktop control before installing an update."
+        else -> null
+    }
+    fun safeForUpdate(): Boolean = synchronized(lock) { updateBlockReasonLocked()==null }
+    fun withSafeUpdateBoundary(action:()->Unit) = synchronized(lock) {
+        check(updateBlockReasonLocked()==null) { "UPDATE_REQUIRES_SAFE_IDLE" }
+        updateInstallationPending=true;publish()
+        try { action() } catch(failure:Throwable) { updateInstallationPending=false;publish();throw failure }
+    }
+    fun installBoundaryReady():Boolean = synchronized(lock) { updateInstallationPending && updateBlockReasonLocked(includeInstall=false)==null }
+    /** Recovered OS installer sessions retain the reservation until native reconciliation proves none remain. */
+    fun reserveUpdateInstallRecovery() = synchronized(lock) {
+        updateInstallationPending=true;publish()
+    }
+    fun endUpdateInstall() = synchronized(lock) {
+        updateInstallationPending=false;publish()
+    }
+    /** Caller reads the platform state at the click, rather than trusting an acknowledgment alone. */
+    fun confirmUpdateRadioRecovery(observedAirplaneState:Boolean): Boolean = synchronized(lock) {
+        val expected=pendingUpdateRadioState ?: return@synchronized true
+        radio=observedAirplaneState
+        if(expected!=observedAirplaneState) { message="Restore airplane mode to its original state before confirming.";publish();return@synchronized false }
+        pendingUpdateRadioState=null;message=null;publish();true
+    }
+    /** Explicit recovery cannot remove overrides from a service that started while UI work queued. */
+    fun withProviderResetBoundary(action:()->Boolean):Boolean = synchronized(lock) {
+        check(!serviceRunning && provider==null && !phoneArmed && !updateInstallationPending) { "STOP_SERVICE_BEFORE_PROVIDER_RESET" }
+        val succeeded=try { action() } catch(failure:Throwable) { providerCleanupPending=true;publish();throw failure }
+        providerCleanupPending=!succeeded;publish();succeeded
+    }
+    /** Internal phone UI calls this only after a real native provider reset completes. */
+    fun recordProviderReset(succeeded:Boolean) = synchronized(lock) {
+        if(succeeded && !phoneArmed) providerCleanupPending=false
+        else if(!succeeded) providerCleanupPending=true
         publish()
     }
 
@@ -321,6 +390,7 @@ object RuntimeModel {
                 put("mode", snapshot.mode?.let { JsonPrimitive(it.name) } ?: JsonNull)
                 put("providerHealth", provider?.health ?: "NOT_PREPARED")
                 put("phoneStartRequired", !phoneArmed)
+                put("desktopUpdateSafe", desktopUpdateSafeLocked())
                 put("radioObserved", radio)
                 put("desiredAirplaneMode", snapshot.desiredAirplaneMode?.let(::JsonPrimitive) ?: JsonNull)
                 put("preparedPreview", preview?.json() ?: JsonNull)

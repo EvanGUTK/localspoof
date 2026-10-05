@@ -10,10 +10,12 @@ android {
         applicationId = "dev.localspoof.android"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0"
+        buildConfigField("String", "UPDATE_CATALOG_URL", "\"https://github.com/EvanGUTK/localspoof-releases/releases/latest/download/catalog.json\"")
+        buildConfigField("String", "UPDATE_SIGNATURE_URL", "\"https://github.com/EvanGUTK/localspoof-releases/releases/latest/download/catalog.json.sig\"")
+        versionCode = 8
+        versionName = "0.8.0"
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {

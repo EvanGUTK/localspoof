@@ -120,3 +120,35 @@ internal fun mobileVacationDraft(config: dev.localspoof.domain.VacationConfig) =
     tank = config.tankLiters.toString(), consumption = config.litersPer100Km.toString(), startingMethod = MobileFuelInput.AMOUNT,
     starting = config.startingFuelLiters.toString(), reserve = config.reserveLiters.toString(), grade = config.fuelGrade,
     price = config.fuelPricePerLiter?.toString() ?: "", currency = config.currency)
+
+/** A user-edited automatic station becomes an explicit future choice instead of a recalculation candidate. */
+internal fun mobilePinAutomaticStop(stop: dev.localspoof.domain.RouteStop) = if (stop.id.startsWith("auto_fuel_")) stop.copy(id = "manual_" + java.util.UUID.randomUUID()) else stop
+
+internal data class MobileVacationEstimate(val consumedLiters: Double, val finishFuelLiters: Double,
+    val consumedValue: Double?, val refillCash: Double?, val hotels: Double?, val currency: String)
+internal fun mobileVacationEstimate(request: dev.localspoof.domain.PlanRequest, preview: dev.localspoof.domain.PlanPreview, startingFuel: Double? = null): MobileVacationEstimate? {
+    val config = request.vacation ?: return null
+    var fuel = startingFuel ?: config.startingFuelLiters
+    var consumed = 0.0; var refill: Double? = 0.0; var hotels: Double? = 0.0; var cursor = 0
+    val points = preview.geometry
+    val indices = if (request.stopPointIndices.size == request.stops.size) request.stopPointIndices else request.stops.map { stop ->
+        val next = (cursor until points.size).minByOrNull { dev.localspoof.domain.distanceMeters(points[it], stop.point) } ?: cursor
+        cursor = next; next
+    }
+    cursor = 0
+    fun consumeUntil(index: Int) {
+        val meters = ((cursor + 1)..index).sumOf { dev.localspoof.domain.distanceMeters(points[it - 1], points[it]) }
+        val liters = meters * config.litersPer100Km / 100000; fuel -= liters; consumed += liters; cursor = index
+    }
+    request.stops.forEachIndexed { index, stop ->
+        consumeUntil(indices[index].coerceIn(cursor, points.lastIndex.coerceAtLeast(0)))
+        stop.fuel?.let { station ->
+            val added = (station.refillTargetLiters - fuel).coerceAtLeast(0.0); fuel += added
+            val price = station.pricePerLiter ?: config.fuelPricePerLiter
+            refill = if (refill == null || price == null || station.currency != null && station.currency != config.currency) null else refill!! + added * price
+        }
+        stop.hotel?.let { hotel -> hotels = if (hotels == null || hotel.currency != config.currency || hotel.knownCost == null) null else hotels!! + hotel.knownCost!! }
+    }
+    if (points.isNotEmpty()) consumeUntil(points.lastIndex)
+    return MobileVacationEstimate(consumed, fuel, config.fuelPricePerLiter?.let { consumed * it }, refill, hotels, config.currency)
+}

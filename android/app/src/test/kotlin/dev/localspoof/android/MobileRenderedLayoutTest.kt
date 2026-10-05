@@ -57,7 +57,7 @@ class MobileRenderedLayoutTest {
         return PhoneView(coordinator.snapshot(), desktopEnabled = true, pairingPending = true,
             pairingComparison = "012345", pairingRequestId = "a".repeat(32), providerHealth = "NOT_PREPARED")
     }
-    private fun mount(section: MobileSection, initial: Viewport = matrix.first(), fixture: PhoneView = phone(), draft: MobileDraft = MobileDraft(mode = Mode.DRIVE, originLat = "1", originLon = "2", destinationLat = "1.002", destinationLon = "2.003"), events: (MobileUiEvent) -> Unit = {}): MutableState<Viewport> {
+    private fun mount(section: MobileSection, initial: Viewport = matrix.first(), fixture: PhoneView = phone(), draft: MobileDraft = MobileDraft(mode = Mode.DRIVE, originLat = "1", originLon = "2", destinationLat = "1.002", destinationLon = "2.003"), update: MobileUpdateState = MobileUpdateState(), events: (MobileUiEvent) -> Unit = {}): MutableState<Viewport> {
         val viewport = mutableStateOf(initial)
         compose.setContent {
             val value = viewport.value
@@ -67,7 +67,7 @@ class MobileRenderedLayoutTest {
                 key(value) {
                     MaterialTheme(colorScheme = darkColorScheme()) {
                         MobileApp(MobileUiState(phone = fixture, section = section,
-                            draft = draft), events, Modifier.fillMaxSize())
+                            draft = draft, updateState = update, installedVersion = "0.8.0"), events, Modifier.fillMaxSize())
                     }
                 }
             }
@@ -384,7 +384,7 @@ class MobileRenderedLayoutTest {
 
     @Test fun categoryFiltersAndMapKeyStayReachableWithoutStartingTravel() {
         val events = mutableListOf<MobileUiEvent>()
-        val viewport = mount(MobileSection.MAP, Viewport(320, 800, 1f), PhoneView(Coordinator().snapshot()), MobileDraft(), events::add)
+        val viewport = mount(MobileSection.MAP, Viewport(320, 800, 1f), PhoneView(Coordinator().snapshot()), MobileDraft(), events = events::add)
         listOf(1f, 2.5f).forEach { font ->
             compose.runOnIdle { viewport.value = Viewport(320, 800, font) }; compose.waitForIdle()
             scrollTo("category-hotel"); compose.onNodeWithTag("category-hotel").performClick()
@@ -514,4 +514,24 @@ class MobileRenderedLayoutTest {
         compose.onNodeWithTag("phone-follow").assertIsSelected()
         assertTrue(events.all { it is MobileUiEvent.Section })
     }
+    @Test fun updateControlsDeferThroughPausedJourneyAndSupportOwnedAndroidConfirmation() {
+        val release = MobileUpdateRelease("0.9.0", 9, 29, 1, 6, 6, "https://github.com/EvanGUTK/localspoof-releases/releases/download/v0.9.0/localspoof-0.9.0.apk", 1000, "a".repeat(64), MobileUpdateCatalog.SIGNER, "Changes")
+        val fixture = PhoneView(Coordinator().snapshot()).copy(serviceRunning = true, updateBlockReason = "Stop playback first.")
+        mount(MobileSection.SETTINGS, fixture = fixture, update = MobileUpdateState(MobileUpdateStep.READY, release))
+        compose.onNodeWithTag("update-install").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("update-safe-gate").assertExists()
+    }
+    @Test fun updateReservationAllowsAndroidConfirmationWhileBlockingNewPlayback() {
+        val events = mutableListOf<MobileUiEvent>()
+        val fixture = PhoneView(Coordinator().snapshot(), updateInstallationPending = true, updateBlockReason = "Finish update confirmation.")
+        mount(MobileSection.SETTINGS, fixture = fixture, events = { events.add(it) }, update = MobileUpdateState(MobileUpdateStep.CONFIRMATION))
+        compose.onNodeWithTag("update-confirm").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(listOf(MobileUiEvent.ContinueUpdate), events)
+    }
+    @Test fun standaloneOnlineAndOfflineOptionsAreVisibleWithoutAnyDesktop() {
+        mount(MobileSection.JOURNEY, fixture = PhoneView(Coordinator().snapshot()))
+        compose.onNodeWithTag("planning-online").performScrollTo().assertIsSelected()
+        compose.onNodeWithTag("planning-offline").assertExists().assertIsNotSelected()
+    }
+
 }

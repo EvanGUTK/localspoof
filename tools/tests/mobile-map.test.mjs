@@ -29,20 +29,20 @@ test('Phone snapshot received before map style finishes is replayed once on idle
 
 async function rendererFixture(){
  const source=(await readFile(file,'utf8')).replace(/^import .*?;\n/gm,'').replace(/^ml\.setWorkerUrl.*?;\n/m,'').replace(/^ml\.setWorkerCount.*?;\n/m,'');
- let map,resolveStyle;const styleWait=new Promise(resolve=>{resolveStyle=resolve;});
+ let map,resolveStyle,time=0,frameId=0;const frames=new Map();const styleWait=new Promise(resolve=>{resolveStyle=resolve;});
  const node={clientWidth:384,clientHeight:628,style:{}};
  class Bounds{extend(){return this;}}
  class FakeMap{
   constructor(){map=this;this.loaded=false;this.sources=new Map();this.layers=new Map();this.handlers=new Map();this.queryResults=[];this.updates=0;this.geometryUpdates=0;this.fits=0;this.jumps=[];}
   resize(){}on(event,callback){this.handlers.set(event,callback);}isStyleLoaded(){return this.loaded;}getSource(id){return this.sources.get(id);}
   addSource(id,spec){const owner=this;this.sources.set(id,{...spec,setData(data){this.data=data;owner.updates++;if(id==='journey'||id==='markers')owner.geometryUpdates++;}});}addLayer(layer){this.layers.set(layer.id,layer);}getLayer(id){return this.layers.get(id);}
-  queryRenderedFeatures(){return this.queryResults;}fitBounds(){this.fits++;}jumpTo(value){this.jumps.push(value);}getCenter(){return {lat:41.8781,lng:-87.6298};}getZoom(){return 14;}fire(event,value){this.handlers.get(event)?.(value);}
+  queryRenderedFeatures(){return this.queryResults;}fitBounds(){this.fits++;}jumpTo(value){this.jumps.push(value);this.fire('moveend');}getCenter(){return {lat:41.8781,lng:-87.6298};}getZoom(){return 14;}fire(event,value){this.handlers.get(event)?.(value);}
  }
  const window={innerWidth:384,innerHeight:628,addEventListener(){},mobileMapReady(){},mobileMapFail(){assert.fail('Unexpected renderer failure');}};
  const location={origin:'https://localspoof.invalid',href:''};
- const context=vm.createContext({createMotionTracker,flightCoordinates,performance:{now:()=>0},cancelAnimationFrame(){},document:{documentElement:{style:{}},body:{style:{}},getElementById:()=>node},ResizeObserver:class{observe(){}},requestAnimationFrame:()=>1,window,ml:{Map:FakeMap,LngLatBounds:Bounds},fetch:async()=>({json:()=>styleWait}),location});
+ const context=vm.createContext({createMotionTracker,flightCoordinates,performance:{now:()=>time},cancelAnimationFrame:id=>frames.delete(id),document:{documentElement:{style:{}},body:{style:{}},getElementById:()=>node},ResizeObserver:class{observe(){}},requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},window,ml:{Map:FakeMap,LngLatBounds:Bounds},fetch:async()=>({json:()=>styleWait}),location});
  const execution=new vm.Script(`(async()=>{${source}})()`).runInContext(context);
- return {window,location,async ready(){resolveStyle({version:8,sources:{},layers:[]});await execution;map.loaded=true;map.fire('idle');return map;}};
+ return {window,location,step(ms){time+=ms;const callbacks=[...frames.values()];frames.clear();callbacks.forEach(cb=>cb());},async ready(){resolveStyle({version:8,sources:{},layers:[]});await execution;map.loaded=true;map.fire('idle');return map;}};
 }
 
 test('Nearby pins replay early results once and clearing fences stale clickable features',async()=>{
@@ -91,4 +91,21 @@ test('Recreated renderer restores RAM camera once; ordinary draft pin and Cancel
  const line=JSON.stringify(map.getSource('journey').data);f.window.updateMapState({...approved,candidateDestination:{lat:1.2,lon:2.2},candidateSegments:[{kind:'DRIVE',points:[{lat:1,lon:2},{lat:1.2,lon:2.2}]}]});
  assert.equal(JSON.stringify(map.getSource('journey').data),line);assert.equal(map.getSource('candidate').data.features.length,1);assert.equal(map.fits,0,'Draft editing cannot refit the approved journey');
  f.window.updateMapState(approved);assert.equal(map.getSource('candidate').data.features.length,0);assert.equal(JSON.stringify(map.getSource('journey').data),line);
+});
+
+test('Redundant visible replay and identical geometry cannot rebuild route sources',async()=>{
+ const f=await rendererFixture(),state={origin:{lat:0,lon:0},destination:{lat:0,lon:.001},route:[{lat:0,lon:0},{lat:0,lon:.001}],segments:[]};f.window.updateMapState(state);const map=await f.ready();const before=map.geometryUpdates;
+ f.window.setMapVisible(true);f.window.setMapVisible(true);f.window.updateMapState(state);
+ assert.equal(map.geometryUpdates,before,'Telemetry/native replay must preserve static GeoJSON');
+});
+
+test('Follow camera uses the exact displayed point and coalesces continuous camera viewport messages',async()=>{
+ const f=await rendererFixture();const map=await f.ready();
+ // Expose changing camera centers, as MapLibre does for each jumpTo animation frame.
+ map.getCenter=()=>({lat:map.jumps.at(-1)?.center[1]??0,lng:map.jumps.at(-1)?.center[0]??0});
+ f.window.updateMapMotion({current:{lat:0,lon:0},sequence:1,ageMs:0,health:'LIVE',source:'SIMULATION',owner:'drive',speedMps:10,follow:true});
+ f.location.href='';f.step(200);f.window.updateMapMotion({current:{lat:0,lon:.00001},sequence:2,ageMs:0,health:'LIVE',source:'SIMULATION',owner:'drive',speedMps:10,follow:true});
+ for(let i=0;i<10;i++){f.step(16);const point=map.getSource('current').data.features[0].geometry.coordinates;assert.deepEqual(JSON.parse(JSON.stringify(map.jumps.at(-1).center)),JSON.parse(JSON.stringify(point)),'Camera and marker share the same frame position');assert.equal(f.location.href,'','Follow frames cannot flood the native viewport bridge');}
+ f.step(500);f.window.updateMapMotion({current:{lat:0,lon:.00002},sequence:3,ageMs:0,health:'LIVE',source:'SIMULATION',owner:'drive',speedMps:10,follow:true});f.step(16);
+ assert.equal(new URL(f.location.href).pathname,'/viewport','A changed camera is eventually remembered at the throttled cadence');
 });

@@ -92,4 +92,16 @@ class MobileSavedStoreTest {
         assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"startingFuelLiters\":20.0,", "").toByteArray()) }.isFailure)
         assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"refillTargetLiters\":40.0", "\"refillTargetLiters\":40.0,\"completed\":true").toByteArray()) }.isFailure)
     }
+    @Test fun planningPreferencesAreOptionalBoundedUserConfigurationOnly() {
+        val bytes = MobileSavedStore.encode(listOf(MobileSavedStore.newItem("Plan", "", draft().copy(planningSource = MobilePlanningSource.OFFLINE, automaticFuelStops = true))))
+        val text = bytes.toString(Charsets.UTF_8)
+        val loaded = MobileSavedStore.decode(bytes).single().draft
+        assertEquals(MobilePlanningSource.OFFLINE, loaded.planningSource); assertTrue(loaded.automaticFuelStops)
+        val legacy = text.replace("\"planningSource\":\"OFFLINE\",", "").replace("\"automaticFuelStops\":true,", "")
+        assertEquals(MobilePlanningSource.ONLINE, MobileSavedStore.decode(legacy.toByteArray()).single().draft.planningSource)
+        assertFalse(MobileSavedStore.decode(legacy.toByteArray()).single().draft.automaticFuelStops)
+        assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"OFFLINE\"", "\"REMOTE\"").toByteArray()) }.isFailure)
+        assertTrue(runCatching { MobileSavedStore.decode(text.replace("\"automaticFuelStops\":true", "\"automaticFuelStops\":\"true\"").toByteArray()) }.isFailure)
+    }
+
 }

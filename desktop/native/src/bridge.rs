@@ -442,7 +442,7 @@ impl Drop for Connection {
 #[derive(Default)]
 pub struct Bridge {
     connection: Option<Connection>,
-    pairing_target: Option<(String, String)>,
+    pairing_target: Option<(String, String, bool)>,
 }
 
 impl Bridge {
@@ -451,20 +451,45 @@ impl Bridge {
         if self.connection.is_some() {
             return Err(NativeError::InvalidRequest);
         }
-        let adb = Adb::new(adb_path)?;
-        crate::adb::validate_serial(serial)?;
-        let devices = adb.devices()?;
-        let device = devices
-            .iter()
-            .find(|device| device.serial == serial)
-            .ok_or(NativeError::InvalidDevice)?;
-        match device.state.as_str() {
-            "device" => {}
-            "unauthorized" => return Err(NativeError::AdbUnauthorized),
-            "offline" => return Err(NativeError::AdbOffline),
-            _ => return Err(NativeError::InvalidDevice),
+        self.connect_transport(adb_path, serial, false)
+    }
+
+    pub fn connect_wireless(
+        &mut self,
+        adb_path: &str,
+        endpoint: &str,
+    ) -> Result<Value, NativeError> {
+        if self.connection.is_some() {
+            return Err(NativeError::InvalidRequest);
         }
-        adb.require_usb(serial)?;
+        self.connect_transport(adb_path, endpoint, true)
+    }
+
+    fn connect_transport(
+        &mut self,
+        adb_path: &str,
+        serial: &str,
+        wireless: bool,
+    ) -> Result<Value, NativeError> {
+        let adb = Adb::new(adb_path)?;
+        let identity = if wireless {
+            adb.verify_wireless(serial)?.identity
+        } else {
+            crate::adb::validate_serial(serial)?;
+            let devices = adb.devices()?;
+            let device = devices
+                .iter()
+                .find(|d| d.serial == serial)
+                .ok_or(NativeError::InvalidDevice)?;
+            match device.state.as_str() {
+                "device" => {}
+                "unauthorized" => return Err(NativeError::AdbUnauthorized),
+                "offline" => return Err(NativeError::AdbOffline),
+                _ => return Err(NativeError::InvalidDevice),
+            }
+            adb.require_usb(serial)?;
+            serial.to_owned()
+        };
         let port_text = adb.device(
             serial,
             &["forward", "tcp:0", "localabstract:localspoof.control.v1"],
@@ -521,12 +546,12 @@ impl Bridge {
             .exchange("Hello", json!({}), None)
             .map_err(|_| NativeError::PhoneControlUnavailable)?;
         let capabilities = validate_hello(&hello)?;
-        let usb_radio_available = connection.adb.airplane_state(serial).is_ok();
+        let usb_radio_available = !wireless && connection.adb.airplane_state(serial).is_ok();
         connection.usb_radio_available = usb_radio_available;
         self.connection = Some(connection);
-        self.pairing_target = Some((adb_path.to_owned(), serial.to_owned()));
+        self.pairing_target = Some((adb_path.to_owned(), serial.to_owned(), wireless));
         Ok(
-            json!({"connected":true,"usbAirplaneAvailable":usb_radio_available,"phoneStartRequired":true,"capabilities":capabilities}),
+            json!({"connected":true,"transport":if wireless {"WIFI"} else {"USB"},"identity":identity,"usbAirplaneAvailable":usb_radio_available,"phoneStartRequired":true,"capabilities":capabilities}),
         )
     }
 
@@ -539,19 +564,19 @@ impl Bridge {
         {
             return Err(NativeError::InvalidRequest);
         }
-        // An explicit retry gets a fresh, independently verified USB channel and nonce.
+        // An explicit retry gets a fresh, independently verified selected transport and nonce.
         // The first request uses the Hello-verified connection just opened by connect().
         if self
             .connection
             .as_ref()
             .is_none_or(|connection| connection.pending_pair.is_some())
         {
-            let (adb_path, serial) = self
+            let (adb_path, serial, wireless) = self
                 .pairing_target
                 .clone()
                 .ok_or(NativeError::NotConnected)?;
             self.connection = None;
-            self.connect(&adb_path, &serial)?;
+            self.connect_transport(&adb_path, &serial, wireless)?;
         }
         let connection = self.connection.as_mut().ok_or(NativeError::NotConnected)?;
         let nonce = random_id();

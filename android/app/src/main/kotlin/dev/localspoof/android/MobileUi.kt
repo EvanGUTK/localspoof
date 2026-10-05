@@ -38,6 +38,7 @@ import dev.localspoof.domain.*
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+internal enum class MobilePlanningSource { ONLINE, OFFLINE }
 internal enum class MobileField { ORIGIN_LAT, ORIGIN_LON, DESTINATION_LAT, DESTINATION_LON, SPEED, FLIGHT_SECONDS, DEPARTURE, ARRIVAL, AIRPORT_QUERY, PLACE_QUERY, FLIGHT_SPEED, BOARDING_HOLD, DRIVE_MIN, DRIVE_MAX }
 internal data class MobileDraft(
     val mode: Mode = Mode.INSTANT,
@@ -52,6 +53,7 @@ internal data class MobileDraft(
     val departureId: String = "", val arrivalId: String = "", val airportQuery: String = "", val placeQuery: String = "",
     val departureGroundMode: GroundLegMode = GroundLegMode.DRIVE, val arrivalGroundMode: GroundLegMode = GroundLegMode.DRIVE,
     val flightTransitMode: dev.localspoof.domain.FlightTransitMode = dev.localspoof.domain.FlightTransitMode.TIMED,
+    val planningSource: MobilePlanningSource = MobilePlanningSource.ONLINE, val automaticFuelStops: Boolean = false,
     val customPath: Boolean = false, val simulationOnly: Boolean = false,
     val preparedId: String? = null, val busy: Boolean = false,
     val vacation: MobileVacationDraft = MobileVacationDraft(),
@@ -70,9 +72,25 @@ internal data class MobileUiState(
     val settingsError: String? = null,
     val airports: List<Airport> = emptyList(),
     val remainingEdit: MobileRemainingDraft? = null,
-    val mapOverlay: MobileMapOverlayState? = null
+    val mapOverlay: MobileMapOverlayState? = null,
+    val updateState: MobileUpdateState = MobileUpdateState(),
+    val installedVersion: String = "",
+    val vehicleCatalog: MobileVehicleUi = MobileVehicleUi(),
+    val candidateBudget: MobileVacationEstimate? = null
 )
 internal sealed interface MobileUiEvent {
+    data class PlanningSource(val source: MobilePlanningSource) : MobileUiEvent
+    data class AutomaticFuelStops(val enabled: Boolean) : MobileUiEvent
+    data class VehicleSelection(val field: String, val value: String) : MobileUiEvent
+    data object VehicleLookup : MobileUiEvent
+    data object ReferenceFuelPrices : MobileUiEvent
+    data object CheckUpdate : MobileUiEvent
+    data object DownloadUpdate : MobileUiEvent
+    data object InstallUpdate : MobileUiEvent
+    data object CancelUpdate : MobileUiEvent
+    data object UpdateInstallPermission : MobileUiEvent
+    data object ContinueUpdate : MobileUiEvent
+    data object ConfirmUpdateRadio : MobileUiEvent
     data class Section(val section: MobileSection) : MobileUiEvent
     data class Edit(val field: MobileField, val value: String) : MobileUiEvent
     data class SelectMode(val mode: Mode) : MobileUiEvent
@@ -361,7 +379,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     }
     Action("Journey options", "mobile-journey-options") { event(MobileUiEvent.Section(MobileSection.JOURNEY)) }
     if (state.draft.mode == Mode.INSTANT) Button(onClick = { event(MobileUiEvent.Preview) }, enabled = !state.draft.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("map-preview")) { Text("Preview this location") }
-    else Text("Build worldwide road routes in Windows. This map follows the phone's approved plan.", style = MaterialTheme.typography.bodySmall)
+    else Text("Open Journey options to plan worldwide roads on this phone. Windows is an optional connected interface.", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable private fun PlaybackProgress(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
@@ -604,21 +622,21 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
 }
 @Composable private fun StartAction(state: MobileUiState, event: (MobileUiEvent) -> Unit, status: Boolean = false) {
     if (state.draft.preparedId != null && !state.draft.busy && state.draft.speedError == null && state.draft.flightSpeedError == null && mobileBoardingValid(state.draft) && mobileDrivingValid(state.draft)) {
-        Button(onClick = { event(MobileUiEvent.StartLocal) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(if (status) "phone-start-local-content" else "phone-start-local")) { Text("Start this plan", softWrap = true) }
+        Button(enabled = !state.updateState.blocksStart && !state.phone.updateInstallationPending, onClick = { event(MobileUiEvent.StartLocal) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(if (status) "phone-start-local-content" else "phone-start-local")) { Text("Start this plan", softWrap = true) }
     } else if (state.phone.snapshot.state == SessionState.READY) {
-        Button(onClick = { event(MobileUiEvent.StartApproved) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(if (status) "phone-start-approved-content" else "phone-start-approved")) { Text("Start approved plan on phone", softWrap = true) }
+        Button(enabled = !state.updateState.blocksStart && !state.phone.updateInstallationPending, onClick = { event(MobileUiEvent.StartApproved) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(if (status) "phone-start-approved-content" else "phone-start-approved")) { Text("Start approved plan on phone", softWrap = true) }
     }
 }
 
 @Composable private fun ConnectScreen(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
     Panel("Connect to Windows") {
-        Text("Choose locations and worldwide online routes in the Windows app. This phone app plays the plan after you approve and press Start here.")
+        Text("Use Windows as an optional larger interface. This phone can plan and play independently; connecting never replaces your active journey.")
         Text("1. Enable Developer options and select LocalSpoof as the mock location app. Keep device location on.")
         Action("Open Developer options") { event(MobileUiEvent.DeveloperSettings) }
         Action("Grant location and notification permissions") { event(MobileUiEvent.Permissions) }
-        Text("2. Connect a USB data cable. Enable USB debugging and authorize your computer on the phone.")
-        Text("3. Enable desktop control below. In Windows, open Connect and Scan USB, then connect this phone. Compare the number on both screens and approve here only if they match.")
-        Button(onClick = { event(MobileUiEvent.EnableDesktop) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("enable-desktop")) { Text(if (state.phone.desktopEnabled) "USB desktop control enabled" else "Enable USB desktop control", softWrap = true) }
+        Text("2. Choose USB debugging with a data cable, or Android 11+ Wireless debugging on the same Wi-Fi. Pair the computer in Windows; Android trust and LocalSpoof approval are separate.")
+        Text("3. Enable desktop control below. In Windows, choose USB or Wi-Fi and connect this phone. Compare the number on both screens and approve here only if they match.")
+        Button(enabled = !state.updateState.blocksStart && !state.phone.updateInstallationPending, onClick = { event(MobileUiEvent.EnableDesktop) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("enable-desktop")) { Text(if (state.phone.desktopEnabled) "Desktop control enabled" else "Enable desktop control", softWrap = true) }
     }
     if (state.phone.desktopEnabled) Panel("Pairing") {
         if (state.phone.pairingPending) {
@@ -648,7 +666,7 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
     val preview = if (d.preparedId != null) state.phone.preview else (state.phone.snapshot.activePreview ?: state.phone.snapshot.preparedPreview).takeIf { state.phone.snapshot.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.HOLDING) }
     RemainingJourneyActions(state, event)
     Panel(if (state.remainingEdit != null) "Edit remaining journey" else "Journey") {
-        Text("Worldwide online routes are built in Windows. Search and preview on the map here; teleport, custom paths and imported offline road routes can be prepared on this phone.")
+        Text("Plan and start on this phone. Windows is an optional connected interface to the same journey.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Mode.entries.filter { mode -> state.remainingEdit?.let { edit -> if (edit.choices.mode == Mode.FLIGHT) mode == Mode.FLIGHT else mode in setOf(Mode.WALK, Mode.DRIVE) && (edit.choices.vacation == null || mode == Mode.DRIVE) } ?: true }.forEach { mode -> FilterChip(selected = mode == d.mode, onClick = { event(MobileUiEvent.SelectMode(mode)) }, label = { Text(if (mode == Mode.FLIGHT) "Airport journey" else mode.name.lowercase().replaceFirstChar { it.uppercase() }) }, modifier = Modifier.heightIn(min = 48.dp)) }
         }
@@ -663,6 +681,13 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
         }
         Text(if (d.mode == Mode.INSTANT) "Location to hold" else "Destination", style = MaterialTheme.typography.titleMedium)
         Coordinates(d.destinationLat, d.destinationLon, "destination", layout.twoColumnFields, event)
+        if (d.mode != Mode.INSTANT) {
+            Text("Route source", style = MaterialTheme.typography.titleMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { MobilePlanningSource.entries.forEach { source ->
+                FilterChip(selected = d.planningSource == source, onClick = { event(MobileUiEvent.PlanningSource(source)) }, label = { Text(if (source == MobilePlanningSource.ONLINE) "Online" else "Imported offline") }, modifier = Modifier.heightIn(min = 48.dp).testTag("planning-${source.name.lowercase()}"))
+            } }
+            Text("Online providers receive the locations needed to calculate this draft. Planning stays local; no LocalSpoof account or backend. Coverage and posted speed limits vary.", style = MaterialTheme.typography.bodySmall)
+        }
         if (d.mode == Mode.WALK || d.mode == Mode.DRIVE) {
             PrivateInput(d.speedText, "Speed (${state.preferences.speedUnit.label})", "speed-input", numeric = true) { event(MobileUiEvent.Edit(MobileField.SPEED, it)) }
             d.speedError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -700,9 +725,13 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
                 if (state.remainingEdit == null || state.remainingEdit.phase in setOf(FlightPhase.ORIGIN_GROUND, FlightPhase.BOARDING, FlightPhase.AWAIT_AIRPLANE_MODE, FlightPhase.FLIGHT_INTERVAL)) Action("Use as arrival") { event(MobileUiEvent.AirportSelected(airport.id, false)) }
             }
             if (state.remainingEdit == null) Toggle(d.simulationOnly, "Simulation only; keep radio settings unchanged") { event(MobileUiEvent.SimulationOnly(it)) }
-            Text("Driving legs require offline road coverage when planning here. Instant legs place you directly at their endpoint. Skipping the flight wait keeps the radio and confirmed placement steps. Guided mode pauses for your airplane-mode changes. No app compatibility guarantee.")
+            Text("Driving legs use your selected online router or imported offline roads. Instant legs place you directly at their endpoint. Skipping the flight wait keeps the radio and confirmed placement steps. Guided mode pauses for your airplane-mode changes. No app compatibility guarantee.")
         }
         if (d.mode == Mode.DRIVE && state.remainingEdit == null) VacationOptions(state, event)
+        if (d.mode == Mode.DRIVE && state.remainingEdit?.choices?.vacation != null) {
+            Toggle(d.automaticFuelStops, "Recalculate reachable fuel stops") { event(MobileUiEvent.AutomaticFuelStops(it)) }
+            Text("Uses current estimated fuel and remaining roads. Editing or moving an automatic stop pins it as your choice. Active refilling must finish before automatic recalculation.", style = MaterialTheme.typography.bodySmall)
+        }
         d.stops.forEachIndexed { index, stop ->
             StopOptions(index, stop, state, event)
         }
@@ -710,7 +739,7 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
     }
     Panel("Offline map") {
         Action("Import offline GeoPack", "import-pack") { event(MobileUiEvent.ImportPack) }
-        Text(state.phone.pack?.let { "${it.name}\n${it.attribution}\n${it.source}" } ?: "No offline pack loaded. Windows online planning does not require one.")
+        Text(state.phone.pack?.let { "${it.name}\n${it.attribution}\n${it.source}" } ?: "No offline pack loaded. Online planning on this phone does not require one.")
         OfflineMap(state.phone.pack, state.phone.phoneLocation?.point, preview?.geometry ?: emptyList(), layout.compactHeight, preview?.segments ?: emptyList())
         if ((state.phone.pack?.edges?.size ?: 0) > 20_000) Text("Preview draws at most 20,000 roads; routing uses the complete pack.")
         PrivateInput(d.placeQuery, "Search imported place names", "place-search") { event(MobileUiEvent.Edit(MobileField.PLACE_QUERY, it)) }
@@ -718,11 +747,19 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
     }
     preview?.let { preview -> Panel(if (state.remainingEdit != null) "Candidate preview · not applied" else "Plan preview") {
         Text("${mobileDistanceLabel(preview.distanceMeters, state.preferences.distanceUnit)} · ${max(1L, (preview.durationMs + 59_999) / 60_000)} min" + if (preview.customPath) " · custom path" else "")
-        if (preview.routeSource == RouteSource.ONLINE_ROUTER) Text("Online route from Windows · ${preview.routeProvider ?: "external router"}. Playback uses validated, snapped route endpoints.")
+        if (preview.routeSource == RouteSource.ONLINE_ROUTER) Text("Online route · ${preview.routeProvider ?: "external router"}. Playback uses validated, snapped route endpoints.")
         if (preview.distanceMeters > 402336 && preview.mode != Mode.FLIGHT) Text("Over 250 miles. Airport journey offers a staged itinerary with ground route coverage.")
         if (preview.mode == Mode.FLIGHT) {
             Text("${if (preview.departureGroundMode == GroundLegMode.INSTANT) "Instant" else "Drive"} to departure · ${if (preview.flightTransitMode == dev.localspoof.domain.FlightTransitMode.JUMP) "skip flight wait" else "timed simulated flight"} · ${if (preview.arrivalGroundMode == GroundLegMode.INSTANT) "instant" else "drive"} to destination")
             Text("Roads are solid; flight is dashed; instant placements are endpoint markers. Radio and confirmed placement steps remain required.")
+        }
+        if (preview.stops.isNotEmpty()) Text("${preview.stops.size} planned stops · review and edit the stop list above before Start.")
+        if (preview.stops.any { it.kind == StopKind.FUEL }) Text("Fuel station grade availability and estimated prices must be verified. Editing a suggested station pins your choice for the next preview.", style = MaterialTheme.typography.bodySmall)
+        state.candidateBudget?.let { budget ->
+            fun price(value: Double?) = value?.let { "${budget.currency} ${String.format(java.util.Locale.ROOT, "%.2f", it)}" } ?: "Unknown / partial"
+            Text("Estimated fuel used ${String.format(java.util.Locale.ROOT, "%.1f", budget.consumedLiters)} L · arrival fuel ${String.format(java.util.Locale.ROOT, "%.1f", budget.finishFuelLiters)} L")
+            Text("Fuel consumed value ${price(budget.consumedValue)} · refills paid ${price(budget.refillCash)} · hotels ${price(budget.hotels)}")
+            Text("Estimates include route detours and stop durations. Fuel value and refill cash are separate; unknown fees or prices remain partial.", style = MaterialTheme.typography.bodySmall)
         }
         preview.originAirport?.let { Text("Departure airport: ${it.name}") }
         preview.destinationAirport?.let { Text("Arrival airport: ${it.name}") }
@@ -742,6 +779,7 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
 }
 
 @Composable private fun SettingsScreen(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    MobileUpdatesPanel(state, event)
     Panel("Units and defaults") {
         Text("Speed unit")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { MobileSpeedUnit.entries.forEach { unit -> FilterChip(selected = unit == state.preferences.speedUnit, onClick = { event(MobileUiEvent.SpeedUnit(unit)) }, label = { Text(unit.label) }, modifier = Modifier.heightIn(min = 48.dp)) } }
@@ -898,7 +936,7 @@ private class PrivateEditText(context: android.content.Context) : EditText(conte
         }
         val phase = snapshot.phase?.name?.lowercase()?.replace('_', ' ') ?: snapshot.mode?.name?.lowercase() ?: "Journey"
         Text("${phase.replaceFirstChar { it.uppercase() }} · ${mobileEtaLabel(snapshot)}", modifier = Modifier.testTag("phone-stage-strip"), style = MaterialTheme.typography.bodySmall)
-        Text("Worldwide rerouting is available in Windows. Phone edits require imported road coverage or an explicitly selected custom path.", style = MaterialTheme.typography.bodySmall)
+        Text("Plan worldwide roads here or in Windows. Online edits need connectivity; imported road coverage and custom paths remain explicit fallbacks.", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -908,7 +946,8 @@ private class PrivateEditText(context: android.content.Context) : EditText(conte
     FilterChip(selected = v.enabled, onClick = { event(MobileUiEvent.Vacation(v.copy(enabled = !v.enabled))) }, label = { Text("Vacation") }, modifier = Modifier.heightIn(min = 48.dp).testTag("vacation-toggle"))
     if (!v.enabled) return
     Text("Vehicle and estimated fuel · gas/diesel", style = MaterialTheme.typography.titleMedium)
-    Text("Select a catalog vehicle in Windows or enter your own specifications here. Missing tank sizes are never guessed. These are trip estimates, not vehicle telemetry.", style = MaterialTheme.typography.bodySmall)
+    Text("Choose a reference vehicle below or enter your own specifications. Missing tank sizes are never guessed. These are trip estimates, not vehicle telemetry.", style = MaterialTheme.typography.bodySmall)
+    MobileVehiclePicker(state, event)
     PrivateInput(v.vehicle, "Vehicle description", "vacation-vehicle") { event(MobileUiEvent.Vacation(v.copy(vehicle = it))) }
     Toggle(v.metric, "Use litres, km and L/100 km") { event(MobileUiEvent.Vacation(v.copy(metric = it, tank = "", consumption = "", starting = "", reserve = "", price = ""))) }
     PrivateInput(v.tank, if (v.metric) "Tank capacity (litres)" else "Tank capacity (US gallons)", "vacation-tank", numeric = true) { event(MobileUiEvent.Vacation(v.copy(tank = it))) }
@@ -927,7 +966,8 @@ private class PrivateEditText(context: android.content.Context) : EditText(conte
     PrivateInput(v.hotelNights, "Default hotel nights (explicit; independent of stop duration)", "vacation-hotel-nights", numeric = true) { event(MobileUiEvent.Vacation(v.copy(hotelNights = it))) }
     val parsed = runCatching { mobileVacationConfig(v) }
     if (parsed.isFailure) Text("Enter capacity, efficiency, starting fuel and reserve within capacity; prices must be nonnegative and currency a valid code.", color = MaterialTheme.colorScheme.error)
-    Text("Automatic reachable fuel-stop planning runs in Windows. On the phone add verified stations as fuel stops in the road route. Constant consumption is an editable estimate; no high-speed efficiency curve or live pump/hotel prices are claimed.", style = MaterialTheme.typography.bodySmall)
+    Toggle(state.draft.automaticFuelStops, "Plan reachable fuel stops automatically") { event(MobileUiEvent.AutomaticFuelStops(it)) }
+    Text("Automatic stations use online roads, access detours and your explicit starting fuel/reserve. Station grade availability and prices need verification. Constant consumption is editable; no high-speed efficiency curve is claimed.", style = MaterialTheme.typography.bodySmall)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -997,4 +1037,55 @@ private class PrivateEditText(context: android.content.Context) : EditText(conte
     val r = reserve.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..config.tankLiters }
     Text("This is an explicit estimate correction. Spent fuel and costs stay recorded in this session. The phone rejects changes that leave upcoming stops unreachable.", style = MaterialTheme.typography.bodySmall)
     Action("Apply fuel estimate correction", "vacation-correct-apply", enabled = f != null && c != null && r != null && state.phone.snapshot.editId == null) { event(MobileUiEvent.CorrectVacation(requireNotNull(f), requireNotNull(c), requireNotNull(r))) }
+}
+
+@Composable private fun MobileUpdatesPanel(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    val update = state.updateState
+    val phone = state.phone
+    val underlyingIdle = phone.snapshot.state == SessionState.IDLE && !phone.serviceRunning && !phone.desktopEnabled && !phone.simulationArmed && !phone.providerCleanupPending && phone.pendingUpdateRadioState == null
+    val safe = underlyingIdle && (phone.updateBlockReason == null || update.step == MobileUpdateStep.CONFIRMATION && phone.updateInstallationPending)
+    Panel("Updates") {
+        Text("Installed ${state.installedVersion.ifBlank { "LocalSpoof" }}", modifier = Modifier.testTag("update-current-version"))
+        Text("Manual checks use the public signed release feed. No account, background polling or journey data is sent. GitHub may keep request metadata.", style = MaterialTheme.typography.bodySmall)
+        update.release?.let { release -> Text("Available ${release.version}", style = MaterialTheme.typography.titleMedium); Text(release.notes.take(8000)) }
+        update.message?.let { Text(it, modifier = Modifier.testTag("update-message")) }
+        update.progress?.let { Text("${it}%", modifier = Modifier.testTag("update-progress")); LinearProgressIndicator(progress = { it / 100f }, modifier = Modifier.fillMaxWidth()) }
+        if (update.busy && update.progress == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Action(if (update.step == MobileUpdateStep.CHECKING) "Checking…" else "Check for updates", "update-check", enabled = !update.busy && !update.blocksStart) { event(MobileUiEvent.CheckUpdate) }
+        if (update.step in setOf(MobileUpdateStep.AVAILABLE, MobileUpdateStep.FAILED) && update.release != null)
+            Action("Download verified update", "update-download", enabled = safe && !update.busy) { event(MobileUiEvent.DownloadUpdate) }
+        if (update.step == MobileUpdateStep.PERMISSION) Action("Allow install source in Android settings", "update-permission", enabled = safe) { event(MobileUiEvent.UpdateInstallPermission) }
+        if (update.step in setOf(MobileUpdateStep.READY, MobileUpdateStep.PERMISSION)) Action("Install update", "update-install", enabled = safe) { event(MobileUiEvent.InstallUpdate) }
+        if (update.step == MobileUpdateStep.CONFIRMATION) Action("Continue installation", "update-confirm", enabled = safe) { event(MobileUiEvent.ContinueUpdate) }
+        if (!safe) Text(phone.updateBlockReason ?: "Stop the journey and desktop control before downloading/installing. Paused travel, fuel/hotel stops and airplane-mode steps are still active.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("update-safe-gate"))
+        phone.pendingUpdateRadioState?.let { expected ->
+            Text("Restore airplane mode to ${if (expected) "On" else "Off"} before installing.")
+            Action("Open airplane mode settings", "update-radio-settings") { event(MobileUiEvent.AirplaneSettings) }
+            Action("Check restored radio state", "update-radio-confirm") { event(MobileUiEvent.ConfirmUpdateRadio) }
+        }
+        if (phone.providerCleanupPending) Action("Retry owned provider cleanup", "update-provider-cleanup") { event(MobileUiEvent.ResetProviders) }
+        if (update.step !in setOf(MobileUpdateStep.IDLE, MobileUpdateStep.FINISHED)) Action("Cancel update", "update-cancel") { event(MobileUiEvent.CancelUpdate) }
+        Text("Updates replace app binaries in place and preserve saved items. Playback never resumes automatically after installation.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable private fun MobileVehiclePicker(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
+    val catalog = state.vehicleCatalog
+    var expanded by remember { mutableStateOf(false) }
+    var confirmPrices by remember { mutableStateOf(false) }
+    LaunchedEffect(catalog.choices, catalog.busy) { if (catalog.choices.isNotEmpty() && !catalog.busy) expanded = true }
+    Text("FuelEconomy.gov · US reference catalog", style = MaterialTheme.typography.bodySmall)
+    Action(if (catalog.busy) "Loading reference data…" else "Choose year / make / model", "vehicle-catalog", enabled = !catalog.busy) { event(MobileUiEvent.VehicleLookup) }
+    if (catalog.year.isNotBlank()) Text(listOf(catalog.year, catalog.make, catalog.model).filter { it.isNotBlank() }.joinToString(" · "))
+    catalog.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    catalog.referenceMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (expanded && catalog.choices.isNotEmpty()) AlertDialog(onDismissRequest = { expanded = false }, title = { Text("Choose ${catalog.field}") }, text = {
+        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) { catalog.choices.take(2000).forEach { (label, value) ->
+            TextButton(onClick = { expanded = false; event(MobileUiEvent.VehicleSelection(catalog.field, value)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(label, modifier = Modifier.fillMaxWidth()) }
+        } }
+    }, confirmButton = { TextButton(onClick = { expanded = false }) { Text("Cancel") } })
+    Action("Use reference US fuel price", "vehicle-reference-price", enabled = !catalog.busy && state.draft.vacation.currency == "USD") {
+        if (state.draft.vacation.price.isNotBlank()) confirmPrices = true else event(MobileUiEvent.ReferenceFuelPrices)
+    }
+    if (confirmPrices) AlertDialog(onDismissRequest = { confirmPrices = false }, title = { Text("Replace your entered fuel price?") }, text = { Text("Reference prices are estimates, not live station prices. This changes only the draft.") }, confirmButton = { TextButton(onClick = { confirmPrices = false; event(MobileUiEvent.ReferenceFuelPrices) }) { Text("Use reference price") } }, dismissButton = { TextButton(onClick = { confirmPrices = false }) { Text("Keep my price") } })
 }

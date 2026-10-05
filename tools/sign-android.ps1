@@ -28,6 +28,7 @@ try {
     [IO.Directory]::SetAccessControl($SigningDirectory, $Acl)
     $Keystore = Join-Path $SigningDirectory 'localspoof-release.jks'
     $PasswordFile = Join-Path $SigningDirectory 'localspoof-release.password.dpapi'
+    if (-not(Test-Path $Keystore) -or -not(Test-Path $PasswordFile)) { throw 'Original release identity is missing. Restore its key/password outside Git; updates cannot use a replacement key.' }
     foreach ($ExistingFile in @($Keystore, $PasswordFile)) {
         if (Test-Path -LiteralPath $ExistingFile) {
             $FileAcl = New-Object Security.AccessControl.FileSecurity
@@ -39,28 +40,10 @@ try {
             [IO.File]::SetAccessControl($ExistingFile, $FileAcl)
         }
     }
-    if ((Test-Path $Keystore) -and -not (Test-Path $PasswordFile)) { throw 'Existing release key has no password record; do not replace it.' }
-    if (-not (Test-Path $PasswordFile)) {
-        $RandomBytes = New-Object byte[] 32
-        $Generator = [Security.Cryptography.RandomNumberGenerator]::Create()
-        try { $Generator.GetBytes($RandomBytes) } finally { $Generator.Dispose() }
-        $NewPassword = [Convert]::ToBase64String($RandomBytes)
-        ConvertTo-SecureString $NewPassword -AsPlainText -Force | ConvertFrom-SecureString | Set-Content $PasswordFile -Encoding ASCII
-        $NewPassword = $null
-    }
     $SecurePassword = (Get-Content -LiteralPath $PasswordFile -Raw).Trim() | ConvertTo-SecureString
     $Credential = New-Object Management.Automation.PSCredential('localspoof', $SecurePassword)
     $env:LOCALSPOOF_KEYSTORE_PASSWORD = $Credential.GetNetworkCredential().Password
     $env:JAVA_HOME = $JavaHome
-    if (-not (Test-Path $Keystore)) {
-        $NativePreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & $Keytool -genkeypair -keystore $Keystore -storetype JKS -alias localspoof -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=LocalSpoof, OU=Local Build, O=LocalSpoof' -storepass:env LOCALSPOOF_KEYSTORE_PASSWORD -keypass:env LOCALSPOOF_KEYSTORE_PASSWORD
-            $NativeExit = $LASTEXITCODE
-        } finally { $ErrorActionPreference = $NativePreference }
-        if ($NativeExit -ne 0) { throw 'Release key creation failed.' }
-    }
     $Certificate = Join-Path $SigningDirectory 'localspoof-release.cer'
     $NativePreference = $ErrorActionPreference
     try {
@@ -70,9 +53,11 @@ try {
     } finally { $ErrorActionPreference = $NativePreference }
     if ($NativeExit -ne 0) { throw 'Release certificate export failed.' }
     $SignerSha256 = (Get-FileHash -LiteralPath $Certificate -Algorithm SHA256).Hash.ToLowerInvariant()
+    $PinnedCertificate = Join-Path $ProjectRoot 'android\app\src\main\assets\updates\release.cer'
+    if ($SignerSha256 -ne (Get-FileHash $PinnedCertificate -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'Release key differs from the original installed-app identity.' }
     New-Item -ItemType Directory -Force $ReleaseDirectory | Out-Null
-    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.7.0-aligned.apk'
-    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.7.0.apk'
+    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.0-aligned.apk'
+    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.0.apk'
     $NativePreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

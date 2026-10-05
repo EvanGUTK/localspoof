@@ -1,0 +1,6 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildCatalog} from '../release-catalog.mjs';
+const input=()=>({version:'0.8.0',versionCode:8,notes:'Reviewed release',pubDate:'2026-10-05T12:00:00.000Z',signerSha256:'a'.repeat(64),signature:'A'.repeat(160),android:{name:'localspoof-0.8.0.apk',size:1024,sha256:'b'.repeat(64)},windows:{name:'LocalSpoof_0.8.0_x64-setup.exe',size:2048,sha256:'c'.repeat(64)}});
+test('release catalog binds platform feed to exact reviewed Windows artifact',()=>{const value=buildCatalog(input());assert.deepEqual(value.platforms['windows-x86_64'],{url:value.releases[1].url,signature:value.releases[1].signature});assert.equal(value.releases[0].versionCode,8);assert.equal(value.releases[1].protocolMin,6);});
+test('wrong filenames, oversized artifacts and invalid trust metadata cannot be published',()=>{for(const mutate of [v=>v.android.name='app-debug.apk',v=>v.windows.name='other.exe',v=>v.android.size=128*1024*1024+1,v=>v.windows.size=256*1024*1024+1,v=>v.android.sha256='wrong',v=>v.signerSha256='wrong',v=>v.signature='unsigned',v=>v.notes='x'.repeat(8001),v=>v.version='0.8.0/other',v=>v.pubDate='invalid']){const value=input();mutate(value);assert.throws(()=>buildCatalog(value));}});

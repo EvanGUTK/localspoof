@@ -248,7 +248,8 @@ pub fn validate_item(item: &Value) -> Result<(), String> {
             "vacation" => {
                 vacation(value) && object.get("mode").and_then(Value::as_str) == Some("DRIVE")
             }
-            "customPath" => value.is_boolean(),
+            "customPath" | "automaticFuelStops" => value.is_boolean(),
+            "planningSource" => choice(value, &["ONLINE", "OFFLINE"]),
             "stopDwellSeconds" | "dwellSeconds" => number(value, 0.0, 3600.0),
             "flightDurationSeconds" => number(value, 1.0, 86400.0),
             "radioPolicy" => choice(value, &["MANUAL", "SIMULATION", "USB"]),
@@ -534,7 +535,7 @@ mod tests {
     }
     #[test]
     fn typed_vacation_stops_preserve_estimates_but_reject_unknown_metadata() {
-        let mut route = json!({"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"Trip","group":"","kind":"ROUTE","origin":{"lat":0,"lon":0},"destination":{"lat":0,"lon":1},"mode":"DRIVE","vacation":{"tankLiters":60,"startingFuelLiters":30,"reserveLiters":5,"litersPer100Km":8,"fuelGrade":"DIESEL","currency":"EUR"},"stops":[{"id":"fuel-1","point":{"lat":0,"lon":0.5},"kind":"FUEL","dwellSeconds":300,"fuel":{"refillTargetLiters":55,"pricePerLiter":1.8,"currency":"EUR"}},{"id":"hotel-1","point":{"lat":0,"lon":0.7},"kind":"HOTEL","dwellSeconds":43800,"hotel":{"checkInSeconds":300,"staySeconds":43200,"checkOutSeconds":300,"nights":1,"currency":"EUR"}}]});
+        let mut route = json!({"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"Trip","group":"","kind":"ROUTE","origin":{"lat":0,"lon":0},"destination":{"lat":0,"lon":1},"mode":"DRIVE","planningSource":"ONLINE","automaticFuelStops":true,"vacation":{"tankLiters":60,"startingFuelLiters":30,"reserveLiters":5,"litersPer100Km":8,"fuelGrade":"DIESEL","currency":"EUR"},"stops":[{"id":"fuel-1","point":{"lat":0,"lon":0.5},"kind":"FUEL","dwellSeconds":300,"fuel":{"refillTargetLiters":55,"pricePerLiter":1.8,"currency":"EUR"}},{"id":"hotel-1","point":{"lat":0,"lon":0.7},"kind":"HOTEL","dwellSeconds":43800,"hotel":{"checkInSeconds":300,"staySeconds":43200,"checkOutSeconds":300,"nights":1,"currency":"EUR"}}]});
         assert!(validate_item(&route).is_ok());
         route["stops"][0]["fuel"]["refillTargetLiters"] = json!(70);
         assert!(validate_item(&route).is_err());

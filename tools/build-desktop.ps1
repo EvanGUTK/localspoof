@@ -6,6 +6,8 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $PreviousHash = $env:LOCALSPOOF_TRUSTED_APK_SHA256
+$PreviousUpdaterKey = $env:TAURI_SIGNING_PRIVATE_KEY
+$PreviousUpdaterPassword = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 $ApkStream = $null
 $BundledApkStream = $null
 $BundleConfig = '{"bundle":{"resources":[]}}'
@@ -21,6 +23,19 @@ function Read-ToolOutput {
     return $Output
 }
 try {
+    if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+        Add-Type -AssemblyName System.Security
+        $SigningDirectory = Join-Path $env:LOCALAPPDATA 'LocalSpoof\signing'
+        $ProtectedKey = Join-Path $SigningDirectory 'localspoof-updater.key.dpapi'
+        $ProtectedPassword = Join-Path $SigningDirectory 'localspoof-updater.password.dpapi'
+        if (-not(Test-Path $ProtectedKey) -or -not(Test-Path $ProtectedPassword)) { throw 'Original updater identity is missing. Restore it outside Git before building signed updates.' }
+        $KeyBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($ProtectedKey),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
+        $PasswordBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($ProtectedPassword),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
+        try {
+            $env:TAURI_SIGNING_PRIVATE_KEY = [Text.Encoding]::UTF8.GetString($KeyBytes)
+            $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Text.Encoding]::UTF8.GetString($PasswordBytes)
+        } finally { [Array]::Clear($KeyBytes,0,$KeyBytes.Length); [Array]::Clear($PasswordBytes,0,$PasswordBytes.Length) }
+    }
     Push-Location $ProjectRoot
     $LocationPushed = $true
     $NativePreference = $ErrorActionPreference
@@ -54,7 +69,7 @@ try {
         if ($Matches[1] -ine $ExpectedSignerSha256) { throw 'APK signer differs from the trusted release certificate.' }
         $Metadata = @(Read-ToolOutput -Tool $Aapt -Arguments @('dump', 'badging', $ApkPath))
         $PackageLines = @($Metadata | Where-Object { $_ -match '^package: ' })
-        if ($PackageLines.Count -ne 1 -or $PackageLines[0] -notmatch "^package: name='dev\.localspoof\.android' versionCode='7' versionName='0\.7\.0'( |$)") { throw 'APK package or release version differs from LocalSpoof 0.7.0.' }
+        if ($PackageLines.Count -ne 1 -or $PackageLines[0] -notmatch "^package: name='dev\.localspoof\.android' versionCode='8' versionName='0\.8\.0'( |$)") { throw 'APK package or release version differs from LocalSpoof 0.8.0.' }
         if (@($Metadata | Where-Object { $_ -match '^application-debuggable(?:\s|$)' }).Count -gt 0) { throw 'Debuggable APKs cannot be trusted by the release desktop build.' }
         $Digest = [Security.Cryptography.SHA256]::Create()
         try {
@@ -97,6 +112,8 @@ try {
     if ($NativeBuildExit -ne 0) { throw "Native desktop build failed. Check Rust/MSVC/WebView2 prerequisites." }
     Write-Output "Desktop build completed. Webview privacy and physical-device qualification remain required."
 } finally {
+    $env:TAURI_SIGNING_PRIVATE_KEY = $PreviousUpdaterKey
+    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $PreviousUpdaterPassword
     if ($LocationPushed) { Pop-Location }
     if ($null -ne $ApkStream) { $ApkStream.Dispose() }
     if ($null -ne $BundledApkStream) { $BundledApkStream.Dispose() }

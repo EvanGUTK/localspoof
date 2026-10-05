@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const file=new URL('../../android/app/src/main/assets/mobile-map/motion.mjs',import.meta.url);
-async function fixture(){const source=await readFile(file,'utf8');const {createMotionTracker}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));let time=0,id=0;const frames=new Map(),points=[];const tracker=createMotionTracker({now:()=>time,requestFrame:cb=>{frames.set(++id,cb);return id;},cancelFrame:id=>frames.delete(id),draw:(point,stale)=>points.push({point,stale})});return {tracker,points,step(ms){time+=ms;const callbacks=[...frames.values()];frames.clear();callbacks.forEach(cb=>cb(time));},frames};}
+async function fixture(options={}){const source=await readFile(file,'utf8');const {createMotionTracker}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));let time=0,id=0;const frames=new Map(),points=[];const tracker=createMotionTracker({now:()=>time,requestFrame:cb=>{frames.set(++id,cb);return id;},cancelFrame:id=>frames.delete(id),draw:(point,stale)=>points.push({point,stale}),...options});return {tracker,points,step(ms){time+=ms;const callbacks=[...frames.values()];frames.clear();callbacks.forEach(cb=>cb(time));},frames};}
 const sample=(point,sequence,extra={})=>({point,sequence,ageMs:0,health:'LIVE',speedMps:50,source:'SIMULATION',owner:'drive',...extra});
 test('Acknowledged samples interpolate through a road corner without rebuilding route or predicting beyond last fix',async()=>{const f=await fixture();const a={lat:0,lon:0},corner={lat:0,lon:0.00005},b={lat:0.00005,lon:0.00005};const route=[{kind:'DRIVE',points:[a,corner,b]}];f.tracker.update(sample(a,1),route);f.step(200);f.tracker.update(sample(b,2),route);f.step(50);const moving=f.points.at(-1).point;assert.equal(moving.lat,0,'First half follows the first road edge');assert.ok(moving.lon>0&&moving.lon<corner.lon);f.step(150);assert.deepEqual(f.points.at(-1).point,b);f.step(500);assert.deepEqual(f.points.at(-1).point,b,'No extrapolation after acknowledged point');});
 test('Duplicate ACKs do not restart animation and stale/paused/teleport/Stop cancel it',async()=>{const f=await fixture();const a={lat:0,lon:0},b={lat:0,lon:0.0001};f.tracker.update(sample(a,1),[]);f.step(200);f.tracker.update(sample(b,2),[]);f.step(50);const before=f.points.length;f.tracker.update(sample(b,2),[]);assert.equal(f.points.length,before);f.step(150);assert.deepEqual(f.points.at(-1).point,b);f.step(1501);assert.equal(f.points.at(-1).stale,true,'A stalled native stream visibly expires');f.tracker.update(sample(a,3,{health:'PAUSED'}),[]);assert.deepEqual(f.points.at(-1).point,a);f.tracker.update(sample({lat:40,lon:40},4),[]);assert.deepEqual(f.points.at(-1).point,{lat:40,lon:40},'Jump cannot animate across earth');f.tracker.update({point:null,health:'IDLE'},[]);assert.equal(f.points.at(-1).point,null);assert.equal(f.frames.size,0);});
@@ -22,4 +22,30 @@ test('Flight line tessellation and acknowledged marker use identical spherical g
 });
 test('Hidden map releases display frames and return expires stale acknowledged fixes',async()=>{
  const f=await fixture();f.tracker.update(sample({lat:1,lon:2},1),[]);f.tracker.setVisible(false);assert.equal(f.frames.size,0);f.step(2000);f.tracker.setVisible(true);assert.equal(f.points.at(-1).stale,true);assert.deepEqual(f.points.at(-1).point,{lat:1,lon:2});
+});
+
+test('Overlapping fresh ACKs continue from the displayed point without a backward jump',async()=>{
+ const f=await fixture(),a={lat:0,lon:0},b={lat:0,lon:.0001},c={lat:0,lon:.0002};
+ f.tracker.update(sample(a,1));f.step(200);f.tracker.update(sample(b,2));f.step(50);
+ const displayed=f.points.at(-1).point.lon;assert.ok(displayed>0&&displayed<b.lon);
+ f.tracker.update(sample(c,3));assert.ok(Math.abs(f.points.at(-1).point.lon-displayed)<1e-12,'A new acknowledged target must start at the last drawn location');
+ f.step(25);assert.ok(f.points.at(-1).point.lon>displayed);assert.ok(f.points.at(-1).point.lon<c.lon);
+ f.step(1000);assert.equal(f.points.at(-1).point.lon,c.lon,'Never extrapolate beyond the latest acknowledged location');
+});
+test('Duplicate ACK receipt does not shorten the next genuine sample cadence',async()=>{
+ const f=await fixture(),a={lat:0,lon:0},b={lat:0,lon:.0001};
+ f.tracker.update(sample(a,1));f.step(190);f.tracker.update(sample(a,1));f.step(10);f.tracker.update(sample(b,2));f.step(20);
+ assert.ok(f.points.at(-1).point.lon>0&&f.points.at(-1).point.lon<b.lon,'The animation uses the 200ms genuine sample interval, not the 10ms duplicate receipt interval');
+ f.step(180);assert.equal(f.points.at(-1).point.lon,b.lon);
+});
+test('Repeated visible replay cannot terminate an in-progress display animation',async()=>{
+ const f=await fixture(),a={lat:0,lon:0},b={lat:0,lon:.0001};
+ f.tracker.update(sample(a,1));f.step(200);f.tracker.update(sample(b,2));f.step(50);const displayed=f.points.at(-1).point.lon,draws=f.points.length;
+ f.tracker.setVisible(true);f.tracker.setVisible(true);assert.equal(f.points.length,draws,'Idempotent visibility has no display side effect');
+ f.step(50);assert.ok(f.points.at(-1).point.lon>displayed&&f.points.at(-1).point.lon<b.lon);
+});
+
+test('Reduced motion displays acknowledged targets directly and counters retain no coordinates or history',async()=>{
+ const f=await fixture({reducedMotion:()=>true}),a={lat:0,lon:0},b={lat:0,lon:.0001};f.tracker.update(sample(a,1));f.step(200);f.tracker.update(sample(b,2));assert.deepEqual(f.points.at(-1).point,b);f.tracker.update(sample(b,2));
+ const metrics=f.tracker.diagnostics();assert.equal(metrics.samples,2);assert.equal(metrics.duplicates,1);assert.equal(metrics.sampleIntervalMs,200);assert.ok(Object.values(metrics).every(Number.isFinite));assert.equal('point' in metrics,false);assert.equal('history' in metrics,false);
 });

@@ -29,6 +29,9 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
     private var pendingMotion = "{}"
     private var mapVisible = true
     private var rendererDead = false
+    private var pushedState: String? = null
+    private var pushedMotion: String? = null
+    private var pushedPlaces: String? = null
     init {
         setBackgroundColor(android.graphics.Color.rgb(16, 27, 34))
         isSaveEnabled = false; isSaveFromParentEnabled = false
@@ -60,7 +63,7 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
                 return true
             }
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (!disposed && url == "$ORIGIN/mobile-map/index.html") { ready = true; clearHistory(); push() }
+                if (!disposed && url == "$ORIGIN/mobile-map/index.html") { ready = true; pushedState = null; pushedMotion = null; pushedPlaces = null; clearHistory(); evaluateJavascript("window.setMapVisible?.($mapVisible)", null); push() }
             }
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse {
                 val uri = request?.url
@@ -109,12 +112,19 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
         if (disposed || !mapVisible) return
         onResume()
         if (!started) post(startWhenLaidOut)
-        if (ready) { evaluateJavascript("window.setMapVisible?.(true);window.resizeMapViewport?.(true)", null); push() }
+        if (ready) { evaluateJavascript("window.setMapVisible?.(true);window.resizeMapViewport?.()", null); push() }
     }
     fun update(value: String) { if (!disposed && value != pendingState) { pendingState = value; push() } }
-    fun updateMotion(value: String) { if (!disposed && value != pendingMotion) { pendingMotion = value; if (ready) evaluateJavascript("window.pendingMapMotion=$pendingMotion;window.updateMapMotion?.(window.pendingMapMotion)", null) } }
+    fun updateMotion(value: String) { if (!disposed && value != pendingMotion) { pendingMotion = value; push() } }
     fun updatePlaces(value: String) { if (!disposed && value != pendingPlaces) { pendingPlaces = value; push() } }
-    private fun push() { if (ready && !disposed) evaluateJavascript("window.setMapVisible?.($mapVisible);window.pendingMapState=$pendingState;window.updateMapState?.(window.pendingMapState);window.pendingMapMotion=$pendingMotion;window.updateMapMotion?.(window.pendingMapMotion);window.pendingNearbyPlaces=$pendingPlaces;window.updateNearbyPlaces?.(window.pendingNearbyPlaces)", null) }
+    private fun push() {
+        if (!ready || disposed) return
+        val script = StringBuilder()
+        if (pendingState != pushedState) { script.append("window.pendingMapState=$pendingState;window.updateMapState?.(window.pendingMapState);"); pushedState = pendingState }
+        if (pendingMotion != pushedMotion) { script.append("window.pendingMapMotion=$pendingMotion;window.updateMapMotion?.(window.pendingMapMotion);"); pushedMotion = pendingMotion }
+        if (pendingPlaces != pushedPlaces) { script.append("window.pendingNearbyPlaces=$pendingPlaces;window.updateNearbyPlaces?.(window.pendingNearbyPlaces);"); pushedPlaces = pendingPlaces }
+        if (script.isNotEmpty()) evaluateJavascript(script.toString(), null)
+    }
     fun disposeMap() { if (disposed) return; disposed = true; removeCallbacks(startWhenLaidOut); network.close(); if (!rendererDead) stopLoading(); pendingState = "{}"; pendingPlaces = "[]"; pendingMotion = "{}"; if (!rendererDead) { clearHistory(); clearCache(true) }; removeAllViews(); destroy() }
     companion object {
         const val ORIGIN = "https://localspoof.invalid"

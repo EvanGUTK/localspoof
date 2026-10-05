@@ -22,6 +22,11 @@ import kotlinx.coroutines.*
 
 class MainActivity : ComponentActivity() {
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val onlinePlanner by lazy { MobileOnlinePlanner() }
+    private val vehicleCatalog by lazy { MobileVehicleCatalog() }
+    private var vehicleRequest = 0L
+    private var vehicleJob: Job? = null
+    private val updates by lazy { androidx.lifecycle.ViewModelProvider(this)[MobileUpdates::class.java] }
     private var bound = false
     private var bindingRequested = false
     private var boundService: SimulationService? = null
@@ -102,7 +107,7 @@ class MainActivity : ComponentActivity() {
         if (RuntimeModel.view.value.serviceRunning) bindExistingService()
     }
     override fun onStop() { unbindIfNeeded(); super.onStop() }
-    override fun onDestroy() { unbindIfNeeded(); activityScope.cancel(); super.onDestroy() }
+    override fun onDestroy() { onlinePlanner.close(); vehicleCatalog.close(); vehicleRequest++; vehicleJob?.cancel(); unbindIfNeeded(); activityScope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         // Honor framework lifecycle bookkeeping, then discard every saved-state entry.
         // Inputs disable view saving and coordinates use only volatile Compose state.
@@ -155,11 +160,91 @@ class MainActivity : ComponentActivity() {
 
     private val mobileSession by lazy { androidx.lifecycle.ViewModelProvider(this)[MobileSessionState::class.java] }
 
+    private suspend fun planOnPhone(draft: MobileDraft, origin: GeoPoint?, vacation: VacationConfig?, phase: FlightPhase?, remaining: Boolean,
+        revision: Long, token: MobileSessionState.PreparationToken, model: MobileSessionState, editId: String?): PlanRequest {
+        val request = mobilePlanRequest(draft, origin, vacation)
+        if (draft.planningSource == MobilePlanningSource.OFFLINE || draft.customPath || draft.mode == Mode.INSTANT) {
+            require(!draft.automaticFuelStops || draft.mode == Mode.INSTANT) { "AUTOMATIC_STATIONS_REQUIRE_ONLINE" }
+            return request
+        }
+        val snapshot = RuntimeModel.view.value.snapshot
+        val expectedPhase = snapshot.phase
+        return withContext(Dispatchers.IO) {
+            onlinePlanner.plan(request, RuntimeModel.airports, MobilePlanningOptions(remainingPhase = phase, remaining = remaining,
+                automaticFuelStops = draft.automaticFuelStops && request.vacation != null, currentFuelLiters = snapshot.vacation?.remainingFuelLiters.takeIf { remaining },
+                ongoingRefill = remaining && snapshot.waitingFor == "REFUELING")) {
+                val current = RuntimeModel.view.value.snapshot
+                !model.acceptsPreparation(token) || current.revision != revision || current.phase != expectedPhase || current.editId != editId
+            }
+        }.also { check(model.acceptsPreparation(token)) { "PLANNING_CANCELLED" } }
+    }
+
+    private fun requestVehicle(field: String, value: String, model: MobileSessionState) {
+        vehicleJob?.cancel(); vehicleCatalog.cancelRequests(); val owner = ++vehicleRequest
+        val initial = model.vehicleCatalog
+        val next = when (field) {
+            "year" -> if (value.isBlank()) MobileVehicleUi() else MobileVehicleUi(year = value, field = "make")
+            "make" -> initial.copy(make = value, model = "", id = "", field = "model")
+            "model" -> initial.copy(model = value, id = "", field = "configuration")
+            "configuration" -> initial.copy(id = value, field = "complete")
+            else -> return
+        }
+        model.vehicleCatalog = next.copy(busy = true, choices = emptyList(), error = null)
+        val profile = model.draft.vacation
+        vehicleJob = activityScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val cancelled = { owner != vehicleRequest }
+                    when (next.field) {
+                        "year" -> vehicleCatalog.years(cancelled)
+                        "make" -> vehicleCatalog.makes(next.year.toInt(), cancelled)
+                        "model" -> vehicleCatalog.models(next.year.toInt(), next.make, cancelled)
+                        "configuration" -> vehicleCatalog.options(next.year.toInt(), next.make, next.model, cancelled)
+                        else -> emptyList()
+                    }
+                }
+                if (owner != vehicleRequest) return@launch
+                if (next.field == "complete") {
+                    val vehicle = withContext(Dispatchers.IO) { vehicleCatalog.vehicle(next.id.toInt()) { owner != vehicleRequest } }
+                    if (owner != vehicleRequest) return@launch
+                    if (model.draft.vacation != profile || model.draft.mode != Mode.DRIVE || model.remainingEdit != null) {
+                        model.vehicleCatalog = next.copy(error = "Draft changed while loading. Select the vehicle again to apply its reference data.")
+                    } else {
+                        model.invalidate()
+                        model.draft = model.draft.copy(vacation = profile.copy(vehicle = "${vehicle.year} ${vehicle.make} ${vehicle.model}",
+                            consumption = vehicle.combinedMpg?.let { mobileNumber(if (profile.metric) 235.214583 / it else it) } ?: "",
+                            grade = vehicle.fuelGrade ?: profile.grade))
+                        model.vehicleCatalog = next.copy(referenceMessage = "Reference combined MPG applied only to this draft. Tank capacity and starting fuel still require your input.${if (vehicle.combinedMpg == null) " No supported gas/diesel efficiency is provided; enter verified data manually." else ""}")
+                    }
+                } else model.vehicleCatalog = next.copy(choices = result.map { it.text to it.value }, error = if (result.isEmpty()) "No reference choices. Enter specifications manually." else null)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (owner == vehicleRequest) model.vehicleCatalog = next.copy(error = "Reference catalog unavailable. Retry or enter your vehicle data manually.") }
+        }
+    }
+    private fun requestReferencePrices(model: MobileSessionState) {
+        vehicleJob?.cancel(); vehicleCatalog.cancelRequests(); val owner = ++vehicleRequest
+        val profile = model.draft.vacation
+        model.vehicleCatalog = model.vehicleCatalog.copy(busy = true, choices = emptyList(), error = null)
+        vehicleJob = activityScope.launch {
+            try {
+                val prices = withContext(Dispatchers.IO) { vehicleCatalog.prices { owner != vehicleRequest } }
+                if (owner != vehicleRequest) return@launch
+                require(profile.currency == "USD" && model.draft.vacation == profile)
+                val price = requireNotNull(when (profile.grade) { FuelGrade.REGULAR -> prices.regular; FuelGrade.MIDGRADE -> prices.midgrade; FuelGrade.PREMIUM -> prices.premium; FuelGrade.DIESEL -> prices.diesel })
+                model.invalidate(); model.draft = model.draft.copy(vacation = profile.copy(price = mobileNumber(if (profile.metric) price / 3.785411784 else price)))
+                model.vehicleCatalog = model.vehicleCatalog.copy(busy = false, referenceMessage = "${prices.source}; fetched now. Estimated reference only, not verified station pricing. Your active trip stays unchanged.")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (owner == vehicleRequest) model.vehicleCatalog = model.vehicleCatalog.copy(busy = false, error = "Reference price unavailable or draft changed. Your entered price is retained.") }
+        }
+    }
+    private fun mobileNumber(value: Double) = String.format(java.util.Locale.ROOT, "%.3f", value)
+
     @Composable private fun PhoneScreen() {
         val phone by RuntimeModel.view.collectAsState()
+        val updateState by updates.state.collectAsState()
         val model = mobileSession
         val screenScope = rememberCoroutineScope()
-        DisposableEffect(Unit) { onDispose { model.cancelPendingPreparation() } }
+        DisposableEffect(Unit) { model.attachPlanningCancellation { onlinePlanner.cancelRequests() }; onDispose { model.cancelPendingPreparation(); model.attachPlanningCancellation {} } }
         LaunchedEffect(phone.serviceRunning) { if (!phone.serviceRunning) unbindIfNeeded() }
         LaunchedEffect(phone.snapshot.editId) {
             if (model.remainingEdit?.held != null && phone.snapshot.editId != model.remainingEdit?.held?.id) model.finishRemainingEdit(false)
@@ -168,8 +253,25 @@ class MainActivity : ComponentActivity() {
             if (phone.snapshot.state == SessionState.IDLE && phone.snapshot.revision > 0) model.clearActivity()
         }
         MobileApp(MobileUiState(phone, model.section, model.draft, model.preferences,
-            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports, model.remainingEdit, model.mapOverlay), onEvent = { event ->
-            when (event) {
+            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports, model.remainingEdit, model.mapOverlay, updateState, updates.installedVersion, model.vehicleCatalog, model.candidateBudget), onEvent = { event ->
+            if ((updates.state.value.blocksStart || RuntimeModel.view.value.updateInstallationPending) && event in setOf(MobileUiEvent.StartLocal, MobileUiEvent.StartApproved, MobileUiEvent.EnableDesktop)) {
+                RuntimeModel.showError("Finish or cancel the update before starting or connecting desktop control.")
+            } else when (event) {
+                is MobileUiEvent.PlanningSource -> { model.invalidate(); model.draft = model.draft.copy(planningSource = event.source) }
+                is MobileUiEvent.AutomaticFuelStops -> { model.invalidate(); model.draft = model.draft.copy(automaticFuelStops = event.enabled) }
+                MobileUiEvent.VehicleLookup -> requestVehicle("year", "", model)
+                is MobileUiEvent.VehicleSelection -> requestVehicle(event.field, event.value, model)
+                MobileUiEvent.ReferenceFuelPrices -> requestReferencePrices(model)
+                MobileUiEvent.CheckUpdate -> updates.check()
+                MobileUiEvent.DownloadUpdate -> if (RuntimeModel.safeForUpdate()) updates.download() else RuntimeModel.showError("Stop playback and desktop control before downloading this update.")
+                MobileUiEvent.InstallUpdate -> updates.install()
+                MobileUiEvent.CancelUpdate -> updates.cancel()
+                MobileUiEvent.ContinueUpdate -> updates.confirmationIntent()?.let { runCatching { startActivity(it) }.onFailure { RuntimeModel.showError("Android confirmation unavailable. Cancel this update and retry.") } }
+                MobileUiEvent.UpdateInstallPermission -> if (RuntimeModel.safeForUpdate()) runCatching { startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:$packageName"))) }.onFailure { RuntimeModel.showError("Open Android settings and allow installs from LocalSpoof, then return here.") }
+                MobileUiEvent.ConfirmUpdateRadio -> {
+                    val observed = Settings.Global.getInt(contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
+                    if (!RuntimeModel.confirmUpdateRadioRecovery(observed)) RuntimeModel.showError("Radio recovery is incomplete. Restore the requested airplane-mode state, then check again.")
+                }
                 is MobileUiEvent.BeginRemainingEdit -> runCatching {
                     if (event.useUndo) {
                         val held = RuntimeModel.beginRemainingEdit(true)
@@ -195,15 +297,15 @@ class MainActivity : ComponentActivity() {
                         try {
                             held = draftEdit.held ?: RuntimeModel.beginRemainingEdit()
                             model.attachEditHold(held)
-                            val request = mobilePlanRequest(draft, held.confirmedOrigin, held.choices.vacation)
+                            val request = planOnPhone(draft, held.confirmedOrigin, held.choices.vacation, held.phase, true, held.revision, token, model, held.id)
                             val prepared = withContext(Dispatchers.Default) { RuntimeModel.prepareRemaining(held.id, request, held.revision) }
                             check(model.acceptsPreparation(token)) { "EDIT_CANCELLED" }
                             RuntimeModel.applyRemaining(held.id, prepared.id, RuntimeModel.view.value.snapshot.revision)
                             applied = true
                             model.finishRemainingEdit(true)
                         } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) {
-                            if (model.acceptsPreparation(token)) RuntimeModel.showError("Apply failed. Your approved journey is retained. Check offline road coverage, fuel reserve and airport eligibility, then preview again.")
+                        catch (failure: Exception) {
+                            if (model.acceptsPreparation(token)) RuntimeModel.showError("Apply failed; your approved journey is retained. " + mobilePlanningFailureMessage(failure.message))
                         } finally {
                             if (!applied && held != null && RuntimeModel.view.value.snapshot.editId == held.id)
                                 runCatching { RuntimeModel.cancelRemaining(held.id, RuntimeModel.view.value.snapshot.revision) }
@@ -222,11 +324,11 @@ class MainActivity : ComponentActivity() {
                     .onFailure { RuntimeModel.showError("Fuel correction rejected. Check tank capacity, reserve and reachable future stops. The current estimate is retained.") }
                 is MobileUiEvent.Vacation -> { model.invalidate(); model.draft = model.draft.copy(vacation = event.draft) }
                 is MobileUiEvent.ReorderStop -> if (event.index in model.draft.stops.indices && event.index + event.offset in model.draft.stops.indices) {
-                    val stops = model.draft.stops.toMutableList(); val moved = stops.removeAt(event.index); stops.add(event.index + event.offset, moved)
+                    val stops = model.draft.stops.toMutableList(); val moved = mobilePinAutomaticStop(stops.removeAt(event.index)); stops.add(event.index + event.offset, moved)
                     model.invalidate(); model.draft = model.draft.copy(stops = stops)
                 }
                 is MobileUiEvent.ConfigureStop -> if (event.index in model.draft.stops.indices) {
-                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) event.stop else stop })
+                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) mobilePinAutomaticStop(event.stop) else stop })
                 }
                 is MobileUiEvent.Section -> model.section = event.section
                 is MobileUiEvent.Edit -> model.edit(event.field, event.value)
@@ -270,7 +372,7 @@ class MainActivity : ComponentActivity() {
                     model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.filterIndexed { index, _ -> index != event.index })
                 }
                 is MobileUiEvent.StopDwell -> if (event.index in model.draft.stops.indices && event.seconds in 0..3600) {
-                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) stop.copy(dwellMs = event.seconds * 1000) else stop })
+                    model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) mobilePinAutomaticStop(stop.copy(dwellMs = event.seconds * 1000)) else stop })
                 }
                 is MobileUiEvent.LoadSaved -> {
                     model.invalidate(); model.draft = event.draft.copy(stops = event.draft.stops.map { it.copy(id = java.util.UUID.randomUUID().toString()) }, preparedId = null, busy = false, speedError = null, flightSpeedError = null,
@@ -293,6 +395,8 @@ class MainActivity : ComponentActivity() {
                     model.clearActivity()
                 }
                 MobileUiEvent.Preview -> if (!model.draft.busy) {
+                    val currentSnapshot = RuntimeModel.view.value.snapshot
+                    if (model.remainingEdit?.held == null) currentSnapshot.activeChoices?.let { model.refreshRemainingPhase(it, currentSnapshot.phase) }
                     val draft = model.draft
                     val token = model.beginPreparation()
                     val revision = RuntimeModel.coordinator.snapshot().revision
@@ -300,13 +404,19 @@ class MainActivity : ComponentActivity() {
                         try {
                             val context = model.remainingEdit
                             val origin = if (context != null && context.held == null) RuntimeModel.view.value.snapshot.point else context?.confirmedOrigin
-                            val request = mobilePlanRequest(draft, origin, context?.choices?.vacation)
+                            val capturedPhase = RuntimeModel.view.value.snapshot.phase
                             val held = context?.held
+                            val request = planOnPhone(draft, origin, context?.choices?.vacation, held?.phase ?: capturedPhase, context != null, revision, token, model, held?.id)
                             val prepared = withContext(Dispatchers.Default) { if (held != null) RuntimeModel.prepareRemaining(held.id, request, revision) else if (context != null) RuntimeModel.prepareRemainingDraft(request, revision) else RuntimeModel.prepare(request, revision) }
-                            if (model.acceptsPreparation(token)) model.draft = model.draft.copy(preparedId = prepared.id)
+                            if (model.acceptsPreparation(token)) {
+                                model.draft = model.draft.copy(preparedId = prepared.id, stops = prepared.preview.stops,
+                                    departureId = prepared.preview.originAirport?.id ?: model.draft.departureId,
+                                    arrivalId = prepared.preview.destinationAirport?.id ?: model.draft.arrivalId)
+                                model.candidateBudget = mobileVacationEstimate(request, prepared.preview, RuntimeModel.view.value.snapshot.vacation?.remainingFuelLiters.takeIf { context != null })
+                            }
                         } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) {
-                            if (model.acceptsPreparation(token)) RuntimeModel.showError("Unable to prepare: check coordinates, speeds, flight settings, and connected offline road coverage.")
+                        catch (failure: Exception) {
+                            if (model.acceptsPreparation(token)) RuntimeModel.showError(mobilePlanningFailureMessage(failure.message))
                         } finally {
                             // No overlapping preparation is allowed, even after edits discard its ID.
                             model.finishPreparation(token)
@@ -331,7 +441,7 @@ class MainActivity : ComponentActivity() {
                 MobileUiEvent.AirplaneSettings -> openSettings(Settings.ACTION_AIRPLANE_MODE_SETTINGS)
                 MobileUiEvent.ImportPack -> importPack.launch("application/json")
                 MobileUiEvent.ResetProviders -> if (!RuntimeModel.view.value.serviceRunning) screenScope.launch(Dispatchers.Default) {
-                    val ok = FrameworkLocationProvider(this@MainActivity).reset()
+                    val ok = runCatching { RuntimeModel.withProviderResetBoundary { FrameworkLocationProvider(this@MainActivity).reset() } }.getOrDefault(false)
                     RuntimeModel.showError(if (ok) "Provider overrides reset. Consumers may keep their last fix briefly." else "Select LocalSpoof as mock app first; if recovery fails, deselect it, toggle location, or reboot.")
                 }
             }
