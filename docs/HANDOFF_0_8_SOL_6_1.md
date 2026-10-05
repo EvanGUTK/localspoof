@@ -1,10 +1,11 @@
 # LocalSpoof 0.8 handoff for Sol 6.1
 
-Implements [105](105.md) on the 0.7 baseline. Android version code 8, package `dev.localspoof.android`; Windows 0.8.0; protocol minor 6 unchanged. Read [validation](VALIDATION_0_8.md) for the exact scope/evidence and remaining physical checks.
+Implements [105](105.md) on the 0.7 baseline. Current shipped patch: **0.8.1 / Android code 9**, package `dev.localspoof.android`; protocol minor 6 unchanged. Read [0.8.1 validation](VALIDATION_0_8_1.md) for the idle-location fix and both actual in-app upgrade cycles, and [0.8 foundation validation](VALIDATION_0_8.md) for broader scope and remaining physical checks.
 
 ## Architecture and behavior
 
 - Phone remains the single journey/provider/ledger authority. Windows supplies an optional approved controller over USB or Android authenticated Wireless debugging. Connecting must never replace/start a journey.
+- Since 0.8.1, the visible Activity reads genuine device location before standalone playback. Opaque foreground ownership, permission/freshness validation and service/install takeover protect the runtime. Empty untouched route origins fill atomically; manual/saved/prepared/remaining drafts are protected. Keep this reader RAM-only and release it on background/Stop/destroy.
 - Mobile motion continues interrupted interpolation from the displayed point, uses genuine sample cadence, handles visibility idempotently and drives dot/Follow from the same position. Map bridge geometry/viewport work is coalesced. RAM-only `mobileMapDiagnostics` measures timing/counts without coordinates/history.
 - `MobileOnlinePlanner`, `MobilePlanningNetwork`, `MobileVehicleCatalog` add native online road/fuel/eligible-airport/US vehicle-reference planning; `MobileSessionState` fences canceled/stale/phase-advanced work. Remaining Apply still requires a current runtime-owned edit and confirmed held point. A road-provider snap >0.1 m from that held point fails without moving the journey; do not silently create a connector or snap an acknowledged fix.
 - Saved draft options now optionally carry `planningSource` and `automaticFuelStops`; older records remain compatible. No controller authority, activity ledger or credentials are persisted.
@@ -32,6 +33,6 @@ Use OpenMob for physical phone QA: list devices, screenshot + visible tree, act,
 
 ## Current release and next qualification
 
-0.8 is installed on the Windows machine and S24 and published at https://github.com/EvanGUTK/localspoof-releases/releases/tag/v0.8.0. Both actual apps authenticated the public feed and reported current. Final secure APK was restored after private diagnostic pixel QA. Read validation for final hashes. No test journey was started.
+0.8.1 is installed on the Windows machine and S24 and published at https://github.com/EvanGUTK/localspoof-releases/releases/tag/v0.8.1. Both were upgraded from their installed 0.8.0 production apps through Check → verified Download → native Install, and then authenticated the feed as current. The S24's airport origin populated from a fresh genuine fix while Idle and provider not prepared. Read patch validation for final hashes and the canceled Android-install retry. No test journey was started. Production screen protection remains enabled; Windows has been reopened without temporary QA flags.
 
-Next: qualify a user-selected moving journey for Follow/frame cadence/corners/holds/screen-off; perform Wireless-debugging pairing/app approval on a trusted same LAN and measure loss/reconnect; use a genuinely newer signed release to qualify each complete updater installation cycle. Improve native coordinate-input focus scrolling with the Samsung keyboard without expanding the map overlays. These are physical qualification/UI followups, not measured results in this release.
+Next: qualify a user-selected moving journey for Follow/frame cadence/corners/holds/screen-off; perform Wireless-debugging pairing/app approval on a trusted same LAN and measure loss/reconnect. Broaden updater qualification to additional OS versions and nonempty bookmark datasets; safe-idle installation on this Windows/S24 pair is now measured. Improve native coordinate-input focus scrolling with the Samsung keyboard without expanding the map overlays. Publish future reviewed assets to a draft first and publish/set latest only after upload completion.

@@ -56,8 +56,8 @@ try {
     $PinnedCertificate = Join-Path $ProjectRoot 'android\app\src\main\assets\updates\release.cer'
     if ($SignerSha256 -ne (Get-FileHash $PinnedCertificate -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'Release key differs from the original installed-app identity.' }
     New-Item -ItemType Directory -Force $ReleaseDirectory | Out-Null
-    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.0-aligned.apk'
-    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.0.apk'
+    $AlignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.1-aligned.apk'
+    $SignedApk = Join-Path $ReleaseDirectory 'localspoof-0.8.1.apk'
     $NativePreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

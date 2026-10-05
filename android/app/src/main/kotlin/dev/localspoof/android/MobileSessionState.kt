@@ -24,13 +24,30 @@ internal class MobileSessionState : ViewModel() {
     fun attachPlanningCancellation(callback: () -> Unit) { planningCancel = callback }
     var candidateBudget by mutableStateOf<MobileVacationEstimate?>(null)
     var vehicleCatalog by mutableStateOf(MobileVehicleUi())
+    var originLocationStatus by mutableStateOf<String?>(null)
+    private var automaticOriginAllowed = true
+    private var requestedOriginGeneration: Long? = null
+    fun protectOrigin() { automaticOriginAllowed = false; requestedOriginGeneration = null }
+    fun requestPhoneOrigin() { invalidate(); requestedOriginGeneration = generation; originLocationStatus = "Finding phone location…" }
+    fun acceptPhoneOrigin(location: PhoneLocation?, automatic: Boolean = true): Boolean {
+        val current = location?.takeIf { it.ageMs in 0..30_000 } ?: return false
+        val requested = requestedOriginGeneration == generation
+        if (remainingEdit != null || draft.busy || draft.preparedId != null) return false
+        if (!requested && (!automatic || !automaticOriginAllowed || current.source != PhoneLocationSource.DEVICE ||
+                draft.mode == Mode.INSTANT || draft.originLat.isNotBlank() || draft.originLon.isNotBlank())) return false
+        invalidate()
+        automaticOriginAllowed = false; requestedOriginGeneration = null; originLocationStatus = null
+        draft = draft.copy(originLat = current.point.lat.toString(), originLon = current.point.lon.toString(),
+            originLabel = if (current.source == PhoneLocationSource.DEVICE) "Phone location" else "Current simulated location")
+        return true
+    }
     private var beforeEdit: MobileDraft? = null
     private var generation = 0L
     private var preparationSequence = 0L
     private var preparationOwner: Long? = null
     private var invalidWalkDefault = false
     private var invalidDriveDefault = false
-    fun invalidate() { candidateBudget = null; planningCancel(); generation++; draft = draft.copy(preparedId = null) }
+    fun invalidate() { requestedOriginGeneration = null; candidateBudget = null; planningCancel(); generation++; draft = draft.copy(preparedId = null) }
     data class PreparationToken(val generation: Long, val owner: Long)
     fun beginPreparation(): PreparationToken {
         check(!draft.busy)
@@ -46,6 +63,7 @@ internal class MobileSessionState : ViewModel() {
     fun cancelPendingPreparation() { invalidate(); preparationOwner = null; draft = draft.copy(busy = false) }
     private fun preset(mode: Mode): Double = if (mode == Mode.WALK) preferences.walkSpeedMps else preferences.driveSpeedMps
     fun clearActivity() {
+        automaticOriginAllowed = true; requestedOriginGeneration = null; originLocationStatus = null
         remainingEdit = null; beforeEdit = null
         mapOverlay.viewport = null; mapOverlay.nearby = emptyList(); mapOverlay.follow = false
         cancelPendingPreparation()
@@ -104,6 +122,7 @@ internal class MobileSessionState : ViewModel() {
     fun selectArrivalGroundMode(mode: GroundLegMode) { invalidate(); draft = draft.copy(arrivalGroundMode = mode) }
     fun selectFlightTransitMode(mode: FlightTransitMode) { invalidate(); draft = draft.copy(flightTransitMode = mode) }
     fun edit(field: MobileField, value: String) {
+        if (field in setOf(MobileField.ORIGIN_LAT, MobileField.ORIGIN_LON)) protectOrigin()
         if (field !in setOf(MobileField.AIRPORT_QUERY, MobileField.PLACE_QUERY)) invalidate()
         draft = when (field) {
             MobileField.ORIGIN_LAT -> draft.copy(originLat = value, originLabel = "")

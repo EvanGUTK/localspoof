@@ -26,7 +26,7 @@ fun validatedDeviceFix(location: Location, nowNanos: Long): DeviceLocationFix? {
     return DeviceLocationFix(GeoPoint(location.latitude, location.longitude), accuracy, location.elapsedRealtimeNanos)
 }
 
-/** Visible foreground-service reader. Close before adding test providers; never retains history. */
+/** Real-location reader for a visible Activity or foreground service. Close before adding test providers; no history. */
 class DeviceLocationSampler(context: Context, private val receive: (DeviceLocationFix) -> Unit) : AutoCloseable {
     private val context = context.applicationContext
     private val manager = this.context.getSystemService(LocationManager::class.java)

@@ -51,6 +51,7 @@ object RuntimeModel {
     private var radio = false
     private var phoneArmed = false
     private val phoneLocation = PhoneLocationState()
+    private var foregroundLocationOwner: Any? = null
     private val preparedRadioPolicies = LinkedHashMap<String, String>()
     private var activeRadioPolicy: String? = null
     private var controllerOwnedEdit = false
@@ -155,7 +156,29 @@ object RuntimeModel {
 
     fun attach(adapter: FrameworkLocationProvider) = synchronized(lock) {
         check(!updateInstallationPending) { "UPDATE_INSTALLATION_PENDING" }
+        foregroundLocationOwner = null
         provider = adapter; serviceRunning = true; phoneLocation.attach(adapter); publish()
+    }
+    /** A visible Activity may read real location without starting a service or acquiring mock authority. */
+    private fun foregroundLocationAllowedLocked(): Boolean = !serviceRunning && provider == null && !phoneArmed &&
+        !updateInstallationPending && !providerCleanupPending && pendingUpdateRadioState == null && coordinator.snapshot().state != SessionState.ERROR
+    fun attachForegroundLocation(owner: Any): Boolean = synchronized(lock) {
+        if (!foregroundLocationAllowedLocked()) return@synchronized false
+        foregroundLocationOwner = owner; phoneLocation.attach(owner); publish(); true
+    }
+    fun shouldReadForegroundLocation(owner: Any): Boolean = synchronized(lock) {
+        foregroundLocationOwner === owner && foregroundLocationAllowedLocked()
+    }
+    fun offerForegroundLocation(fix: DeviceLocationFix, owner: Any) = synchronized(lock) {
+        if (foregroundLocationOwner === owner && foregroundLocationAllowedLocked() &&
+            phoneLocation.device(owner, fix, SystemClock.elapsedRealtimeNanos())) publish()
+    }
+    fun refreshForegroundLocation(owner: Any) = synchronized(lock) {
+        if (foregroundLocationOwner === owner && foregroundLocationAllowedLocked()) publish()
+    }
+    fun currentPhoneLocation(): PhoneLocation? = synchronized(lock) { phoneLocation.snapshot(SystemClock.elapsedRealtimeNanos()) }
+    fun detachForegroundLocation(owner: Any) = synchronized(lock) {
+        if (foregroundLocationOwner === owner) { foregroundLocationOwner = null; phoneLocation.clear(owner); publish() }
     }
     fun offerDeviceLocation(fix: DeviceLocationFix, expectedOwner: FrameworkLocationProvider) = synchronized(lock) {
         if (serviceRunning && provider === expectedOwner && !phoneArmed && coordinator.snapshot().state != SessionState.ERROR &&
@@ -280,7 +303,7 @@ object RuntimeModel {
         if (recoveryRadio != null) pendingUpdateRadioState = recoveryRadio
         else if (pendingUsbRadio && pendingUpdateRadioState == null) pendingUpdateRadioState = initialAirplaneAtStart ?: false
         // Revoke control first so queued external commands cannot survive local Stop.
-        controllerOwnedEdit=false;lease.revoke(); desktopEnabled = false; phoneArmed = false; phoneLocation.clear()
+        controllerOwnedEdit=false;lease.revoke(); desktopEnabled = false; phoneArmed = false; foregroundLocationOwner = null; phoneLocation.clear()
         coordinator.stop(); preview = null
         preparedRadioPolicies.clear(); activeRadioPolicy = null; initialAirplaneAtStart = null
         val cleanupResult = provider?.cleanup()

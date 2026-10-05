@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import dev.localspoof.domain.*
 import dev.localspoof.platform.FrameworkLocationProvider
+import dev.localspoof.platform.DeviceLocationSampler
 import kotlinx.coroutines.*
 
 class MainActivity : ComponentActivity() {
@@ -30,6 +31,10 @@ class MainActivity : ComponentActivity() {
     private var bound = false
     private var bindingRequested = false
     private var boundService: SimulationService? = null
+    private var foregroundVisible = false
+    private var foregroundSampler: DeviceLocationSampler? = null
+    private var foregroundLocationOwner: Any? = null
+    private var foregroundLocationJob: Job? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             if (!bindingRequested) return
@@ -40,7 +45,10 @@ class MainActivity : ComponentActivity() {
         override fun onServiceDisconnected(name: ComponentName?) { bound = false; boundService = null }
     }
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-        if (results[Manifest.permission.ACCESS_FINE_LOCATION] != true) RuntimeModel.showError("Precise location permission is required for the location foreground service.")
+        if (results[Manifest.permission.ACCESS_FINE_LOCATION] != true) {
+            mobileSession.originLocationStatus = "Allow precise location to use your phone's position, or choose an origin on the map."
+            RuntimeModel.showError("Precise location permission is required to use this phone's location.")
+        } else refreshForegroundLocation()
     }
     private val importPack = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) activityScope.launch {
@@ -104,10 +112,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        foregroundVisible = true
         if (RuntimeModel.view.value.serviceRunning) bindExistingService()
+        refreshForegroundLocation()
     }
-    override fun onStop() { unbindIfNeeded(); super.onStop() }
-    override fun onDestroy() { onlinePlanner.close(); vehicleCatalog.close(); vehicleRequest++; vehicleJob?.cancel(); unbindIfNeeded(); activityScope.cancel(); super.onDestroy() }
+    override fun onResume() { super.onResume(); refreshForegroundLocation() }
+    override fun onStop() { foregroundVisible = false; closeForegroundLocation(); unbindIfNeeded(); super.onStop() }
+    override fun onDestroy() { closeForegroundLocation(); onlinePlanner.close(); vehicleCatalog.close(); vehicleRequest++; vehicleJob?.cancel(); unbindIfNeeded(); activityScope.cancel(); super.onDestroy() }
     override fun onSaveInstanceState(outState: Bundle) {
         // Honor framework lifecycle bookkeeping, then discard every saved-state entry.
         // Inputs disable view saving and coordinates use only volatile Compose state.
@@ -120,10 +131,54 @@ class MainActivity : ComponentActivity() {
         catch (_: ActivityNotFoundException) { RuntimeModel.showError("Open Android settings manually to complete setup.") }
     }
 
-    private fun askPermissions() {
+    private fun askPermissions(includeNotifications: Boolean = true) {
         val requested = mutableListOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 33) requested += Manifest.permission.POST_NOTIFICATIONS
+        if (includeNotifications && Build.VERSION.SDK_INT >= 33) requested += Manifest.permission.POST_NOTIFICATIONS
         permissions.launch(requested.toTypedArray())
+    }
+
+    private fun closeForegroundLocation() {
+        foregroundLocationJob?.cancel(); foregroundLocationJob = null
+        foregroundSampler?.close(); foregroundSampler = null
+        foregroundLocationOwner?.let(RuntimeModel::detachForegroundLocation); foregroundLocationOwner = null
+    }
+
+    /** Only a visible screen reads genuine fixes. Playback keeps its separate service-owned source. */
+    private fun refreshForegroundLocation() {
+        if (!foregroundVisible) return
+        val current = RuntimeModel.view.value
+        if (current.serviceRunning || current.simulationArmed || current.updateInstallationPending || current.providerCleanupPending ||
+            current.pendingUpdateRadioState != null || current.snapshot.state == SessionState.ERROR) {
+            closeForegroundLocation(); return
+        }
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            closeForegroundLocation()
+            mobileSession.originLocationStatus = "Tap Use phone location to allow precise location, or choose an origin on the map."
+            return
+        }
+        val locationEnabled = runCatching { getSystemService(android.location.LocationManager::class.java).isLocationEnabled }.getOrDefault(false)
+        if (!locationEnabled) {
+            closeForegroundLocation()
+            mobileSession.originLocationStatus = "Phone location is off. Enable Location in Android, then tap Use phone location to retry."
+            return
+        }
+        foregroundLocationOwner?.let { if (foregroundSampler != null && RuntimeModel.shouldReadForegroundLocation(it)) return }
+        closeForegroundLocation()
+        val owner = Any()
+        if (!RuntimeModel.attachForegroundLocation(owner)) return
+        foregroundLocationOwner = owner
+        mobileSession.originLocationStatus = "Finding phone location…"
+        foregroundSampler = DeviceLocationSampler(this) { fix -> RuntimeModel.offerForegroundLocation(fix, owner) }.also { it.start() }
+        val started = SystemClock.elapsedRealtime()
+        foregroundLocationJob = activityScope.launch {
+            while (isActive && foregroundVisible && RuntimeModel.shouldReadForegroundLocation(owner)) {
+                RuntimeModel.refreshForegroundLocation(owner)
+                if (RuntimeModel.view.value.phoneLocation != null) mobileSession.originLocationStatus = null
+                else if (SystemClock.elapsedRealtime() - started >= 20_000)
+                    mobileSession.originLocationStatus = "No fresh phone location yet. Move near a window and tap Use phone location to retry, or choose an origin on the map."
+                delay(1_000)
+            }
+        }
     }
 
     private fun bindExistingService() {
@@ -246,6 +301,11 @@ class MainActivity : ComponentActivity() {
         val screenScope = rememberCoroutineScope()
         DisposableEffect(Unit) { model.attachPlanningCancellation { onlinePlanner.cancelRequests() }; onDispose { model.cancelPendingPreparation(); model.attachPlanningCancellation {} } }
         LaunchedEffect(phone.serviceRunning) { if (!phone.serviceRunning) unbindIfNeeded() }
+        LaunchedEffect(phone.serviceRunning, phone.simulationArmed, phone.updateInstallationPending, phone.providerCleanupPending,
+            phone.pendingUpdateRadioState, phone.snapshot.state, phone.snapshot.revision) { refreshForegroundLocation() }
+        LaunchedEffect(phone.phoneLocation, model.draft.mode, model.section) {
+            if (phone.snapshot.activeChoices == null) model.acceptPhoneOrigin(phone.phoneLocation)
+        }
         LaunchedEffect(phone.snapshot.editId) {
             if (model.remainingEdit?.held != null && phone.snapshot.editId != model.remainingEdit?.held?.id) model.finishRemainingEdit(false)
         }
@@ -253,7 +313,7 @@ class MainActivity : ComponentActivity() {
             if (phone.snapshot.state == SessionState.IDLE && phone.snapshot.revision > 0) model.clearActivity()
         }
         MobileApp(MobileUiState(phone, model.section, model.draft, model.preferences,
-            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports, model.remainingEdit, model.mapOverlay, updateState, updates.installedVersion, model.vehicleCatalog, model.candidateBudget), onEvent = { event ->
+            model.walkDefaultText, model.driveDefaultText, model.settingsError, RuntimeModel.airports, model.remainingEdit, model.mapOverlay, updateState, updates.installedVersion, model.vehicleCatalog, model.candidateBudget, model.originLocationStatus), onEvent = { event ->
             if ((updates.state.value.blocksStart || RuntimeModel.view.value.updateInstallationPending) && event in setOf(MobileUiEvent.StartLocal, MobileUiEvent.StartApproved, MobileUiEvent.EnableDesktop)) {
                 RuntimeModel.showError("Finish or cancel the update before starting or connecting desktop control.")
             } else when (event) {
@@ -346,6 +406,7 @@ class MainActivity : ComponentActivity() {
                     model.draft = if (event.departure) model.draft.copy(departureId = event.id, airportQuery = "") else model.draft.copy(arrivalId = event.id, airportQuery = "")
                 }
                 is MobileUiEvent.OriginSelected -> {
+                    model.protectOrigin()
                     model.invalidate(); model.draft = model.draft.copy(originLat = event.point.lat.toString(), originLon = event.point.lon.toString(), originLabel = event.label?.take(300) ?: "Chosen on map")
                 }
                 is MobileUiEvent.DrivingMode -> model.selectDrivingMode(event.mode)
@@ -375,6 +436,7 @@ class MainActivity : ComponentActivity() {
                     model.invalidate(); model.draft = model.draft.copy(stops = model.draft.stops.mapIndexed { index, stop -> if (index == event.index) mobilePinAutomaticStop(stop.copy(dwellMs = event.seconds * 1000)) else stop })
                 }
                 is MobileUiEvent.LoadSaved -> {
+                    model.protectOrigin()
                     model.invalidate(); model.draft = event.draft.copy(stops = event.draft.stops.map { it.copy(id = java.util.UUID.randomUUID().toString()) }, preparedId = null, busy = false, speedError = null, flightSpeedError = null,
                         speedText = mobileFormatSpeed(event.draft.speedMps, model.preferences.speedUnit),
                         flightSpeedText = mobileFormatSpeed(event.draft.flightSpeedMps, model.preferences.speedUnit), driveMinText = mobileFormatSpeed(event.draft.driveMinMps, model.preferences.speedUnit), driveMaxText = mobileFormatSpeed(event.draft.driveMaxMps, model.preferences.speedUnit))
@@ -384,8 +446,15 @@ class MainActivity : ComponentActivity() {
                 is MobileUiEvent.PlaceSelected -> {
                     model.invalidate(); model.draft = model.draft.copy(destinationLat = event.point.lat.toString(), destinationLon = event.point.lon.toString(), destinationLabel = event.label?.take(300) ?: "Chosen on map", placeQuery = "")
                 }
-                MobileUiEvent.CurrentOrigin -> phone.phoneLocation?.takeIf { it.ageMs <= 30_000 }?.point?.let {
-                    model.invalidate(); model.draft = model.draft.copy(originLat = it.lat.toString(), originLon = it.lon.toString(), originLabel = "Phone location")
+                MobileUiEvent.CurrentOrigin -> {
+                    model.requestPhoneOrigin()
+                    if (!model.acceptPhoneOrigin(RuntimeModel.currentPhoneLocation(), automatic = false)) {
+                        closeForegroundLocation()
+                        refreshForegroundLocation()
+                        if (RuntimeModel.view.value.serviceRunning)
+                            model.originLocationStatus = "No fresh confirmed phone position yet. Check the current playback state, then retry or choose an origin on the map."
+                        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) askPermissions(includeNotifications = false)
+                    }
                 }
                 MobileUiEvent.ResetPreferences -> model.resetPreferences()
                 MobileUiEvent.Stop -> {

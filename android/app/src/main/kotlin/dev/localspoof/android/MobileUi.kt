@@ -76,7 +76,8 @@ internal data class MobileUiState(
     val updateState: MobileUpdateState = MobileUpdateState(),
     val installedVersion: String = "",
     val vehicleCatalog: MobileVehicleUi = MobileVehicleUi(),
-    val candidateBudget: MobileVacationEstimate? = null
+    val candidateBudget: MobileVacationEstimate? = null,
+    val originLocationStatus: String? = null
 )
 internal sealed interface MobileUiEvent {
     data class PlanningSource(val source: MobilePlanningSource) : MobileUiEvent
@@ -676,7 +677,10 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
             else Text("Starts at the confirmed phone position. Completed travel stays completed.")
             state.phone.phoneLocation?.let { location ->
                 Text("${if (location.source.name == "DEVICE") "Device location" else "Simulated location"} · ${location.ageMs / 1000} s old")
-                if (state.remainingEdit == null) Action("Use phone location as origin", "use-phone-origin", enabled = location.ageMs <= 30_000) { event(MobileUiEvent.CurrentOrigin) }
+            }
+            if (state.remainingEdit == null) {
+                Action("Use phone location as origin", "use-phone-origin", enabled = !d.busy) { event(MobileUiEvent.CurrentOrigin) }
+                state.originLocationStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
         Text(if (d.mode == Mode.INSTANT) "Location to hold" else "Destination", style = MaterialTheme.typography.titleMedium)

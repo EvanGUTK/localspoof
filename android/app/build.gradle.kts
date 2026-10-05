@@ -12,8 +12,8 @@ android {
         targetSdk = 36
         buildConfigField("String", "UPDATE_CATALOG_URL", "\"https://github.com/EvanGUTK/localspoof-releases/releases/latest/download/catalog.json\"")
         buildConfigField("String", "UPDATE_SIGNATURE_URL", "\"https://github.com/EvanGUTK/localspoof-releases/releases/latest/download/catalog.json.sig\"")
-        versionCode = 8
-        versionName = "0.8.0"
+        versionCode = 9
+        versionName = "0.8.1"
     }
     buildFeatures { compose = true; buildConfig = true }
     testOptions {

@@ -69,7 +69,7 @@ try {
         if ($Matches[1] -ine $ExpectedSignerSha256) { throw 'APK signer differs from the trusted release certificate.' }
         $Metadata = @(Read-ToolOutput -Tool $Aapt -Arguments @('dump', 'badging', $ApkPath))
         $PackageLines = @($Metadata | Where-Object { $_ -match '^package: ' })
-        if ($PackageLines.Count -ne 1 -or $PackageLines[0] -notmatch "^package: name='dev\.localspoof\.android' versionCode='8' versionName='0\.8\.0'( |$)") { throw 'APK package or release version differs from LocalSpoof 0.8.0.' }
+        if ($PackageLines.Count -ne 1 -or $PackageLines[0] -notmatch "^package: name='dev\.localspoof\.android' versionCode='9' versionName='0\.8\.1'( |$)") { throw 'APK package or release version differs from LocalSpoof 0.8.1.' }
         if (@($Metadata | Where-Object { $_ -match '^application-debuggable(?:\s|$)' }).Count -gt 0) { throw 'Debuggable APKs cannot be trusted by the release desktop build.' }
         $Digest = [Security.Cryptography.SHA256]::Create()
         try {
