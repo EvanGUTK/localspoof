@@ -423,7 +423,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }.onFailure { RuntimeModel.showError("Speed update rejected. Check the allowed range and current journey.") }
                 MobileUiEvent.JumpNextStop -> runCatching { RuntimeModel.jumpToNextStop() }
-                    .onFailure { RuntimeModel.showError("Jump unavailable. Resume playback and complete the current placement or airplane-mode step first.") }
+                    .onFailure { RuntimeModel.showError(mobileJumpBlockReason(RuntimeModel.view.value, model.remainingEdit != null)
+                        ?: "Jump was not accepted. Review the current journey details and try again.") }
                 is MobileUiEvent.AddStop -> runCatching {
                     require(event.dwellSeconds in 0..3600 && model.draft.stops.size < 32 && model.draft.mode in setOf(Mode.WALK, Mode.DRIVE))
                     val stop = RouteStop(event.point, event.dwellSeconds * 1000, event.label)

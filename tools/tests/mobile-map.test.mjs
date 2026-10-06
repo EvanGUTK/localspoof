@@ -46,13 +46,13 @@ async function rendererFixture(){
 }
 
 test('Nearby pins replay early results once and clearing fences stale clickable features',async()=>{
- const fixture=await rendererFixture();const point={lat:41.8781391,lon:-87.6301201,number:1,color:'#e9b76a'};
+ const fixture=await rendererFixture();const point={lat:41.8781391,lon:-87.6301201,number:1,color:'#e9b76a',batch:'11111111-1111-1111-1111-111111111111'};
  fixture.window.updateNearbyPlaces([point]);const map=await fixture.ready();const data=map.getSource('nearby').data;
  assert.equal(data.features.length,1,'Pending category results must appear after style readiness');
  const feature=data.features[0];assert.equal(feature.properties.number,1);
  fixture.window.updateNearbyPlaces([point]);map.fire('idle');map.fire('idle');assert.equal(map.updates,0,'An unchanged result batch cannot create an idle redraw loop');
  map.queryResults=[feature];map.fire('click',{point:{x:5,y:10},lngLat:{lat:0,lng:0}});
- const selection=new URL(fixture.location.href);assert.equal(selection.pathname,'/select');assert.equal(Number(selection.searchParams.get('lat')),point.lat);assert.ok(Math.abs(Number(selection.searchParams.get('lon'))-point.lon)<1e-10,'A pin must select its exact approved point, even when its pixel covers another coordinate');
+ const selection=new URL(fixture.location.href);assert.equal(selection.pathname,'/poi','A hotel pin must browse details without selecting a map destination');assert.equal(selection.searchParams.get('batch'),point.batch);assert.equal(selection.searchParams.get('index'),'0');assert.equal(selection.searchParams.has('lat'),false);
  fixture.window.updateNearbyPlaces([]);assert.equal(map.getSource('nearby').data.features.length,0,'Clear must remove every displayed nearby result');
  fixture.location.href='';map.fire('click',{point:{x:5,y:10},lngLat:{lat:1,lng:2}});assert.equal(fixture.location.href,'','A renderer feature from a cleared batch cannot stage a stale place');
 });
@@ -108,4 +108,24 @@ test('Follow camera uses the exact displayed point and coalesces continuous came
  for(let i=0;i<10;i++){f.step(16);const point=map.getSource('current').data.features[0].geometry.coordinates;assert.deepEqual(JSON.parse(JSON.stringify(map.jumps.at(-1).center)),JSON.parse(JSON.stringify(point)),'Camera and marker share the same frame position');assert.equal(f.location.href,'','Follow frames cannot flood the native viewport bridge');}
  f.step(500);f.window.updateMapMotion({current:{lat:0,lon:.00002},sequence:3,ageMs:0,health:'LIVE',source:'SIMULATION',owner:'drive',speedMps:10,follow:true});f.step(16);
  assert.equal(new URL(f.location.href).pathname,'/viewport','A changed camera is eventually remembered at the throttled cadence');
+});
+
+
+test('Explicit nearby selection preserves city camera until deliberate Fit route or new preview',async()=>{
+ const f=await rendererFixture();const initial={origin:{lat:1,lon:2},destination:{lat:1.1,lon:2.1},route:[],segments:[],preserveCameraRevision:0};f.window.updateMapState(initial);const map=await f.ready();const fits=map.fits,jumps=map.jumps.length;
+ f.window.updateMapState({...initial,destination:{lat:40,lon:50},preserveCameraRevision:1});
+ assert.equal(map.fits,fits,'Selecting a hotel cannot zoom out to a distant origin');assert.equal(map.jumps.length,jumps);
+ map.fire('idle');assert.equal(map.fits,fits,'Idle cannot undo the preserved camera');
+ f.window.updateMapMotion({fitRevision:1});assert.equal(map.fits,fits+1,'Explicit Fit route still frames selected endpoints');
+ f.window.updateMapState({...initial,destination:{lat:40,lon:50},route:[initial.origin,{lat:40,lon:50}],preserveCameraRevision:1});assert.equal(map.fits,fits+2,'A newly prepared preview can frame the route');
+});
+
+test('Hotel selection with a prior preview retains its line and camera; a newly prepared route frames deliberately',async()=>{
+ const f=await rendererFixture();const prior={origin:{lat:1,lon:2},destination:{lat:1.1,lon:2.1},route:[{lat:1,lon:2},{lat:1.1,lon:2.1}],segments:[{kind:'DRIVE',points:[{lat:1,lon:2},{lat:1.1,lon:2.1}]}],camera:{lat:40,lon:50,zoom:14},preserveCameraRevision:0};
+ f.window.updateMapState(prior);const map=await f.ready(),line=JSON.stringify(map.getSource('journey').data),jumps=map.jumps.length;
+ // Native preview geometry remains authoritative while only the draft POI changes.
+ f.window.updateMapState({...prior,preserveCameraRevision:1});
+ assert.equal(map.fits,0);assert.equal(map.jumps.length,jumps);assert.equal(JSON.stringify(map.getSource('journey').data),line);
+ const destination={lat:40,lon:50};f.window.updateMapState({...prior,destination,route:[prior.origin,destination],segments:[{kind:'DRIVE',points:[prior.origin,destination]}],preserveCameraRevision:1});
+ assert.equal(map.fits,1,'A fresh preview can frame its changed endpoint and road');assert.notEqual(JSON.stringify(map.getSource('journey').data),line);
 });

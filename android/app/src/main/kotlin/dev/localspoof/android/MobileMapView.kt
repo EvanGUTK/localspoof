@@ -14,7 +14,9 @@ import dev.localspoof.domain.*
 import kotlinx.serialization.json.*
 import java.io.ByteArrayInputStream
 
-internal class MobileMapView(context: Context, private val network: MobileMapNetwork, private val viewport: (MapViewport) -> Unit = {}, private val gesture: () -> Unit = {}, private val rendererGone: () -> Unit = {}, private val select: (GeoPoint) -> Unit) : WebView(context) {
+internal data class NearbyPinClick(val batch: String, val index: Int)
+
+internal class MobileMapView(context: Context, private val network: MobileMapNetwork, private val viewport: (MapViewport) -> Unit = {}, private val gesture: () -> Unit = {}, private val rendererGone: () -> Unit = {}, private val poi: (NearbyPinClick) -> Unit = {}, private val select: (GeoPoint) -> Unit) : WebView(context) {
     private var ready = false
     private var started = false
     private val startWhenLaidOut = Runnable {
@@ -26,6 +28,8 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
     @Volatile private var disposed = false
     private var pendingState = "{}"
     private var pendingPlaces = "[]"
+    private var approvedBatch = ""
+    private var approvedPlaces = emptyList<NearbyPlace>()
     private var pendingMotion = "{}"
     private var mapVisible = true
     private var rendererDead = false
@@ -58,6 +62,7 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
                 if (!disposed && request?.isForMainFrame == true) {
                     parseViewport(request.url)?.let { viewport(it) }
                     if (isGesture(request.url)) gesture()
+                    parseNearbyPin(request.url)?.takeIf { mapVisible && it.batch == approvedBatch && it.index in approvedPlaces.indices }?.let { poi(it) }
                     parseSelection(request.url)?.let { select(it) }
                 }
                 return true
@@ -116,7 +121,12 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
     }
     fun update(value: String) { if (!disposed && value != pendingState) { pendingState = value; push() } }
     fun updateMotion(value: String) { if (!disposed && value != pendingMotion) { pendingMotion = value; push() } }
-    fun updatePlaces(value: String) { if (!disposed && value != pendingPlaces) { pendingPlaces = value; push() } }
+    fun updatePlaces(places: List<NearbyPlace>, batch: String) {
+        if (disposed) return
+        approvedBatch = batch; approvedPlaces = places.take(8).toList()
+        val value = mobileNearbyState(approvedPlaces, batch)
+        if (value != pendingPlaces) { pendingPlaces = value; push() }
+    }
     private fun push() {
         if (!ready || disposed) return
         val script = StringBuilder()
@@ -125,7 +135,7 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
         if (pendingPlaces != pushedPlaces) { script.append("window.pendingNearbyPlaces=$pendingPlaces;window.updateNearbyPlaces?.(window.pendingNearbyPlaces);"); pushedPlaces = pendingPlaces }
         if (script.isNotEmpty()) evaluateJavascript(script.toString(), null)
     }
-    fun disposeMap() { if (disposed) return; disposed = true; removeCallbacks(startWhenLaidOut); network.close(); if (!rendererDead) stopLoading(); pendingState = "{}"; pendingPlaces = "[]"; pendingMotion = "{}"; if (!rendererDead) { clearHistory(); clearCache(true) }; removeAllViews(); destroy() }
+    fun disposeMap() { if (disposed) return; disposed = true; removeCallbacks(startWhenLaidOut); network.close(); if (!rendererDead) stopLoading(); pendingState = "{}"; pendingPlaces = "[]"; approvedBatch = ""; approvedPlaces = emptyList(); pendingMotion = "{}"; if (!rendererDead) { clearHistory(); clearCache(true) }; removeAllViews(); destroy() }
     companion object {
         const val ORIGIN = "https://localspoof.invalid"
         private val assetPaths = setOf("/mobile-map/index.html", "/mobile-map/map.css", "/mobile-map/map.mjs", "/mobile-map/motion.mjs", "/mobile-map/bootstrap.js", "/mobile-map/world-style.json", "/mobile-map/vendor/maplibre-gl.mjs", "/mobile-map/vendor/maplibre-gl-shared.mjs", "/mobile-map/vendor/maplibre-gl-worker.mjs", "/mobile-map/vendor/maplibre-gl.css")
@@ -137,6 +147,14 @@ internal class MobileMapView(context: Context, private val network: MobileMapNet
             val zoom = requireNotNull(uri.getQueryParameter("zoom")).toDouble()
             require(zoom.isFinite() && zoom in 0.0..24.0)
             MapViewport(GeoPoint(requireNotNull(uri.getQueryParameter("lat")).toDouble(), requireNotNull(uri.getQueryParameter("lon")).toDouble()), zoom)
+        }.getOrNull()
+        fun parseNearbyPin(uri: Uri): NearbyPinClick? = runCatching {
+            require(isAppOrigin(uri) && uri.encodedPath == "/poi" && uri.fragment == null && uri.queryParameterNames == setOf("batch", "index") && uri.toString().length <= 160)
+            require(listOf("batch", "index").all { uri.getQueryParameters(it).size == 1 })
+            val batch = requireNotNull(uri.getQueryParameter("batch"))
+            require(batch.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")))
+            val rawIndex = requireNotNull(uri.getQueryParameter("index")); require(rawIndex.matches(Regex("[0-7]")))
+            NearbyPinClick(batch, rawIndex.toInt())
         }.getOrNull()
         fun parseSelection(uri: Uri): GeoPoint? = runCatching {
             require(isAppOrigin(uri) && uri.path == "/select" && uri.fragment == null && uri.queryParameterNames == setOf("lat", "lon") && uri.toString().length <= 180)
@@ -181,22 +199,23 @@ private fun mobileMapMotion(phone: PhoneView, follow: Boolean, fitRevision: Long
     put("owner", "${phone.snapshot.mode?.name ?: "NONE"}:${phone.snapshot.phase?.name ?: "NONE"}:${location?.placementGeneration ?: 0}")
     put("follow", follow); put("fitRevision", fitRevision)
 }
-internal fun mobileNearbyState(places: List<NearbyPlace>): String = buildJsonArray {
-    places.take(8).forEachIndexed { index, place -> add(buildJsonObject { put("lat", place.point.lat); put("lon", place.point.lon); put("number", index + 1); put("color", place.category.color) }) }
+internal fun mobileNearbyState(places: List<NearbyPlace>, batch: String): String = buildJsonArray {
+    places.take(8).forEachIndexed { index, place -> add(buildJsonObject { put("lat", place.point.lat); put("lon", place.point.lon); put("number", index + 1); put("color", place.category.color); put("batch", batch) }) }
 }.toString()
-@Composable internal fun MobileLiveMap(phone: PhoneView, draft: MobileDraft, modifier: Modifier, places: List<NearbyPlace> = emptyList(), onViewport: (MapViewport) -> Unit = {}, follow: Boolean = false, fitRevision: Long = 0, visible: Boolean = true, restoreCamera: MapViewport? = null, retryRevision: Long = 0, onGesture: () -> Unit = {}, select: (GeoPoint) -> Unit) {
+@Composable internal fun MobileLiveMap(phone: PhoneView, draft: MobileDraft, modifier: Modifier, places: List<NearbyPlace> = emptyList(), onViewport: (MapViewport) -> Unit = {}, follow: Boolean = false, fitRevision: Long = 0, visible: Boolean = true, restoreCamera: MapViewport? = null, retryRevision: Long = 0, onGesture: () -> Unit = {}, placesBatch: String = "", preserveCameraRevision: Long = 0, onPoi: (NearbyPinClick) -> Unit = {}, select: (GeoPoint) -> Unit) {
     val callback by rememberUpdatedState(select)
+    val poiCallback by rememberUpdatedState(onPoi)
     val viewportCallback by rememberUpdatedState(onViewport)
     val gestureCallback by rememberUpdatedState(onGesture)
     var rendererGeneration by remember { mutableIntStateOf(0) }
     val initialCamera = remember(rendererGeneration, retryRevision) { restoreCamera }
     val preview = phone.snapshot.activePreview ?: phone.preview ?: phone.snapshot.preparedPreview
-    val geometry = remember(preview, phone.preview, initialCamera, draft.preparedId, draft.originLat, draft.originLon, draft.destinationLat, draft.destinationLon) { mapJson(JsonObject(mobileMapGeometry(phone, draft) + (initialCamera?.let { mapOf("camera" to buildJsonObject { put("lat", it.point.lat); put("lon", it.point.lon); put("zoom", it.zoom) }) } ?: emptyMap()))) }
+    val geometry = remember(preview, phone.preview, initialCamera, preserveCameraRevision, draft.preparedId, draft.originLat, draft.originLon, draft.destinationLat, draft.destinationLon) { mapJson(JsonObject(mobileMapGeometry(phone, draft) + mapOf("preserveCameraRevision" to JsonPrimitive(preserveCameraRevision)) + (initialCamera?.let { mapOf("camera" to buildJsonObject { put("lat", it.point.lat); put("lon", it.point.lon); put("zoom", it.zoom) }) } ?: emptyMap()))) }
     key(rendererGeneration, retryRevision) { AndroidView(
-        factory = { context -> MobileMapView(context, MobileMapNetwork(), { viewportCallback(it) }, { gestureCallback() }, { rendererGeneration++ }) { callback(it) } },
+        factory = { context -> MobileMapView(context, MobileMapNetwork(), { viewportCallback(it) }, { gestureCallback() }, { rendererGeneration++ }, { poiCallback(it) }) { callback(it) } },
         modifier = modifier.clipToBounds(),
         onReset = null,
         onRelease = { it.disposeMap() },
-        update = { it.setMapVisible(visible); it.update(geometry); it.updateMotion(mapJson(mobileMapMotion(phone, follow, fitRevision))); it.updatePlaces(mobileNearbyState(places)) }
+        update = { it.setMapVisible(visible); it.update(geometry); it.updateMotion(mapJson(mobileMapMotion(phone, follow, fitRevision))); it.updatePlaces(places, placesBatch) }
     ) }
 }

@@ -233,7 +233,25 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
 /** Volatile map presentation only; never saved or supplied to the runtime. */
 @Stable internal class MobileMapOverlayState {
     var viewport by mutableStateOf<MapViewport?>(null)
-    var nearby by mutableStateOf<List<NearbyPlace>>(emptyList())
+    var placesBatch by mutableStateOf(java.util.UUID.randomUUID().toString())
+        private set
+    private var nearbyValue by mutableStateOf<List<NearbyPlace>>(emptyList())
+    var nearby: List<NearbyPlace>
+        get() = nearbyValue
+        set(value) { replaceNearby(value) }
+    var detail by mutableStateOf<NearbyPinClick?>(null)
+        private set
+    var preserveCameraRevision by mutableStateOf(0L)
+        private set
+    fun replaceNearby(value: List<NearbyPlace>) {
+        if (nearby == value) return
+        nearbyValue = value.take(8).toList(); placesBatch = java.util.UUID.randomUUID().toString(); detail = null
+    }
+    fun browse(pin: NearbyPinClick) { if (pin.batch == placesBatch && pin.index in nearby.indices) detail = pin }
+    fun browse(place: NearbyPlace) { val index = nearby.indexOf(place); if (index >= 0) browse(NearbyPinClick(placesBatch, index)) }
+    fun selectedDetail(): NearbyPlace? = detail?.takeIf { it.batch == placesBatch }?.let { nearby.getOrNull(it.index) }
+    fun dismissDetail() { detail = null }
+    fun preserveCamera() { preserveCameraRevision++ }
     var placeRole by mutableStateOf("Destination")
     var follow by mutableStateOf(false)
     var fitRevision by mutableStateOf(0L)
@@ -251,21 +269,21 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
             "Stop", "Next stop" -> event(MobileUiEvent.AddStop(point, label.take(120), 0, next = overlay.placeRole == "Next stop"))
             else -> event(MobileUiEvent.PlaceSelected(point, label))
         }
-        overlay.nearby = emptyList()
+        overlay.replaceNearby(emptyList())
     }
     val large = LocalDensity.current.fontScale >= 1.8f || layout.compactHeight
     if (large) Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.nearby = it }
-        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxWidth().height(160.dp).testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }) { chooseOnMap(it) }
+        SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.replaceNearby(it) }
+        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxWidth().height(160.dp).testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }, placesBatch = overlay.placesBatch, preserveCameraRevision = overlay.preserveCameraRevision, onPoi = { overlay.browse(it); showResults = false }) { chooseOnMap(it) }
         if (overlay.nearby.isNotEmpty()) NearbyResultsButton(overlay.nearby) { showResults = true }
         MapJourneyPanel(state, event, layout.compactHeight)
         MapCameraControls(overlay)
         MobileMapKey(event, overlay.follow, { overlay.follow = it }, { overlay.follow = false; overlay.fitRevision++ }, retry = { overlay.retryRevision++ })
         Text("© OpenStreetMap contributors · OpenFreeMap", style = MaterialTheme.typography.labelSmall)
     } else Box(modifier) {
-        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxSize().testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }) { chooseOnMap(it) }
+        MobileLiveMap(state.phone, state.draft, Modifier.fillMaxSize().testTag("phone-live-map"), overlay.nearby, { overlay.viewport = it }, overlay.follow, overlay.fitRevision, visible = visible, restoreCamera = overlay.viewport, retryRevision = overlay.retryRevision, onGesture = { overlay.follow = false }, placesBatch = overlay.placesBatch, preserveCameraRevision = overlay.preserveCameraRevision, onPoi = { overlay.browse(it); showResults = false }) { chooseOnMap(it) }
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().testTag("mobile-map-top-overlay").padding(horizontal = 12.dp)) {
-            SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.nearby = it }
+            SearchPlaces(state, event, overlay.viewport, overlay.nearby, overlay.placeRole, { overlay.placeRole = it }) { overlay.replaceNearby(it) }
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().testTag("mobile-map-bottom-overlay").padding(horizontal = 12.dp, vertical = 6.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xf5101b22))) {
@@ -291,7 +309,19 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     if (visible && showResults) ModalBottomSheet(onDismissRequest = { showResults = false }, modifier = Modifier.testTag("nearby-sheet")) {
         ModalActions("nearby-sheet", event) { showResults = false }
         Text("Choose a ${if (state.draft.mode == Mode.INSTANT) "destination" else overlay.placeRole.lowercase()}", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium)
-        NearbyResults(state, overlay.nearby, overlay.placeRole, event) { overlay.nearby = emptyList(); showResults = false }
+        NearbyResults(state, overlay.nearby) { overlay.browse(it); showResults = false }
+    }
+    val detailOwner = overlay.detail
+    val detail = overlay.selectedDetail()
+    if (visible && detail != null) ModalBottomSheet(onDismissRequest = { overlay.dismissDetail() }, modifier = Modifier.testTag("nearby-detail-sheet")) {
+        NearbyPlaceDetails(state, detail, overlay.placeRole, close = { overlay.dismissDetail() }, back = { overlay.dismissDetail(); showResults = true }, select = {
+            // Revalidate at confirmation time: a refreshed batch cannot select an old detail.
+            if (overlay.detail == detailOwner && overlay.selectedDetail() == detail && !state.draft.busy) {
+                overlay.preserveCamera()
+                selectNearbyPlace(state, detail, overlay.placeRole, event)
+                overlay.dismissDetail()
+            }
+        })
     }
     if (visible && showJourney) ModalBottomSheet(onDismissRequest = { showJourney = false }, modifier = Modifier.testTag("journey-sheet")) {
         ModalActions("journey-sheet", event) { showJourney = false }
@@ -369,7 +399,11 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     Text(preview?.let { "${mobileDistanceLabel(it.distanceMeters, state.preferences.distanceUnit)} · ${max(1L, (it.durationMs + 59999) / 60000)} min preview" }
         ?: if (state.draft.destinationLat.isNotBlank()) state.draft.destinationLabel.ifBlank { "Selected place · ready to preview" } else "Search for a place or tap the map", style = MaterialTheme.typography.titleMedium)
     state.phone.phoneLocation?.let { Text("${if (it.source.name == "DEVICE") "Device location" else "Simulated location"} · ${it.ageMs / 1000} s old", style = MaterialTheme.typography.bodySmall) }
-    state.draft.destinationLabel.takeIf { it.isNotBlank() && preview != null }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+    state.draft.destinationLabel.takeIf { it.isNotBlank() && preview != null }?.let { label ->
+        val draftDestination = runCatching { GeoPoint(state.draft.destinationLat.toDouble(), state.draft.destinationLon.toDouble()) }.getOrNull()
+        val staged = draftDestination != null && draftDestination != preview?.destination
+        Text(if (staged) "Draft destination · $label" else label, style = MaterialTheme.typography.bodyMedium)
+    }
     PlaybackProgress(state, event)
     RemainingJourneyActions(state, event)
     if (state.phone.pairingPending) { Text("Computer waiting for approval"); Action("Compare and approve", "open-pairing") { event(MobileUiEvent.Section(MobileSection.CONNECT)) } }
@@ -381,6 +415,25 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     Action("Journey options", "mobile-journey-options") { event(MobileUiEvent.Section(MobileSection.JOURNEY)) }
     if (state.draft.mode == Mode.INSTANT) Button(onClick = { event(MobileUiEvent.Preview) }, enabled = !state.draft.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("map-preview")) { Text("Preview this location") }
     else Text("Open Journey options to plan worldwide roads on this phone. Windows is an optional connected interface.", style = MaterialTheme.typography.bodySmall)
+}
+
+internal fun mobileJumpBlockReason(state: MobileUiState): String? = mobileJumpBlockReason(state.phone, state.remainingEdit != null)
+internal fun mobileJumpBlockReason(phone: PhoneView, editing: Boolean = false): String? {
+    val snapshot = phone.snapshot
+    return when {
+        !phone.simulationArmed || !phone.serviceRunning -> "Phone playback is not running. Stop, then start the journey on this phone before jumping."
+        editing || snapshot.editId != null -> "Apply or cancel the remaining journey edit before jumping."
+        snapshot.state != SessionState.ACTIVE -> "Resume travel before jumping."
+        snapshot.waitingFor != null -> "Complete the required placement or airplane-mode step before jumping."
+        snapshot.nextStop == null -> "No next stop is available to jump to."
+        snapshot.mode == Mode.FLIGHT && snapshot.phase == FlightPhase.BOARDING -> {
+            val hold = snapshot.stages.firstOrNull()?.remainingMs?.takeIf { it >= 0 }
+            (hold?.let { "Boarding hold · ${(it / 1000) + if (it % 1000 > 0) 1 else 0} s remaining. " } ?: "") + "Jump is available after boarding and the required airplane-mode step."
+        }
+        snapshot.mode == Mode.FLIGHT && snapshot.phase == FlightPhase.SETTLING -> "Wait for landing placement to settle before jumping."
+        snapshot.mode == Mode.FLIGHT && snapshot.phase !in setOf(FlightPhase.ORIGIN_GROUND, FlightPhase.FLIGHT_INTERVAL, FlightPhase.DESTINATION_GROUND) -> "Complete the current airport transition before jumping."
+        else -> null
+    }
 }
 
 @Composable private fun PlaybackProgress(state: MobileUiState, event: (MobileUiEvent) -> Unit) {
@@ -410,8 +463,12 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
         }
         snapshot.nextStop?.let { next ->
             var confirm by remember(next) { mutableStateOf(false) }
-            Action("Jump to ${next.label}", "phone-jump-next", enabled = snapshot.state == SessionState.ACTIVE && snapshot.waitingFor == null) { confirm = true }
-            if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Jump to ${next.label}?") }, text = { Text("This places the simulated location at the next stop. Required placement and airplane-mode steps remain in place.") }, confirmButton = { TextButton(onClick = { confirm = false; event(MobileUiEvent.JumpNextStop) }) { Text("Jump") } }, dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
+            val jumpReason = mobileJumpBlockReason(state)
+            val jumpAllowed = jumpReason == null
+            LaunchedEffect(jumpAllowed) { if (!jumpAllowed) confirm = false }
+            Action("Jump to ${next.label}", "phone-jump-next", enabled = jumpAllowed) { confirm = true }
+            jumpReason?.let { Text(it, modifier = Modifier.testTag("phone-jump-reason"), style = MaterialTheme.typography.bodySmall) }
+            if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Jump to ${next.label}?") }, text = { Text("This places the simulated location at the next stop. Required placement and airplane-mode steps remain in place.") }, confirmButton = { TextButton(onClick = { confirm = false; event(MobileUiEvent.JumpNextStop) }, enabled = jumpAllowed) { Text("Jump") } }, dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
         }
     }
 }
@@ -464,7 +521,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     LaunchedEffect(state.draft.placeQuery, role, state.draft.mode) { cancel(); category = null }
     LaunchedEffect(state.phone.snapshot.revision) { if (state.phone.snapshot.state == SessionState.IDLE && state.phone.snapshot.revision > 0) { cancel(); category = null } }
     LaunchedEffect(viewport) { if (busy && category != null) { cancel(); error = "Map moved. Tap Search this area when ready." } }
-    LaunchedEffect(state.draft.originLat, state.draft.originLon, state.draft.destinationLat, state.draft.destinationLon, state.draft.stops) { cancel(); category = null }
+    LaunchedEffect(state.draft.originLat, state.draft.originLon, state.draft.destinationLat, state.draft.destinationLon, state.draft.stops) { if (busy) { cancel(); category = null } }
     fun choose(point: GeoPoint, name: String) {
         when (if (state.draft.mode == Mode.INSTANT) "Destination" else role) {
             "Origin" -> event(MobileUiEvent.OriginSelected(point, name))
@@ -520,16 +577,30 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMobileControlI
     }
 }
 
-@Composable internal fun NearbyResults(state: MobileUiState, nearby: List<NearbyPlace>, role: String, event: (MobileUiEvent) -> Unit, clear: () -> Unit) {
+/** Browsing is presentation only; destination changes require the detail sheet's Select action. */
+@Composable internal fun NearbyResults(state: MobileUiState, nearby: List<NearbyPlace>, browse: (NearbyPlace) -> Unit) {
     Column(Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState()).testTag("nearby-results")) {
-        nearby.forEachIndexed { index, place -> Action("${index + 1}. ${place.name} · ${mobileDistanceLabel(place.distanceMeters, state.preferences.distanceUnit)}", "nearby-result-$index") {
-            when (if (state.draft.mode == Mode.INSTANT) "Destination" else role) {
-                "Origin" -> event(MobileUiEvent.OriginSelected(place.point, place.name))
-                "Stop", "Next stop" -> event(MobileUiEvent.AddStop(place.point, place.name.take(120), 0, next = role == "Next stop"))
-                else -> event(MobileUiEvent.PlaceSelected(place.point, place.name))
-            }
-            clear()
-        } }
+        nearby.forEachIndexed { index, place -> Action("${index + 1}. ${place.name} · ${mobileDistanceLabel(place.distanceMeters, state.preferences.distanceUnit)}", "nearby-result-$index") { browse(place) } }
+    }
+}
+private fun selectNearbyPlace(state: MobileUiState, place: NearbyPlace, role: String, event: (MobileUiEvent) -> Unit) {
+    when (if (state.draft.mode == Mode.INSTANT) "Destination" else role) {
+        "Origin" -> event(MobileUiEvent.OriginSelected(place.point, place.name))
+        "Stop", "Next stop" -> event(MobileUiEvent.AddStop(place.point, place.name.take(120), 0, next = role == "Next stop"))
+        else -> event(MobileUiEvent.PlaceSelected(place.point, place.name))
+    }
+}
+@Composable internal fun NearbyPlaceDetails(state: MobileUiState, place: NearbyPlace, role: String, close: () -> Unit, back: () -> Unit = close, select: () -> Unit) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(place.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag("nearby-detail-name"))
+        Text(place.category.label, modifier = Modifier.testTag("nearby-detail-category"))
+        Text("${mobileDistanceLabel(place.distanceMeters, state.preferences.distanceUnit)} from searched map center", modifier = Modifier.testTag("nearby-detail-distance"))
+        Text("OpenStreetMap place information. Prices and current availability are not provided.", style = MaterialTheme.typography.bodySmall)
+        val chosenRole = if (state.draft.mode == Mode.INSTANT) "destination" else role.lowercase()
+        Text("Select to stage this $chosenRole. Preview and Start or Apply remain separate.", style = MaterialTheme.typography.bodySmall)
+        Action("Select as $chosenRole", "nearby-detail-select", enabled = !state.draft.busy, action = select)
+        Action("Back to results", "nearby-detail-back") { back() }
+        Action("Close", "nearby-detail-close") { close() }
     }
 }
 
@@ -714,9 +785,11 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
             dev.localspoof.domain.FlightTransitMode.entries.forEach { transit ->
                 val tag = if (transit == dev.localspoof.domain.FlightTransitMode.JUMP) "flight-jump" else "flight-timed"
                 FilterChip(selected = transit == d.flightTransitMode, onClick = { event(MobileUiEvent.FlightTransitMode(transit)) },
-                    label = { Text(if (transit == dev.localspoof.domain.FlightTransitMode.JUMP) "Skip wait" else "Timed", modifier = Modifier.fillMaxWidth().wrapContentHeight().testTag("$tag-label")) },
+                    label = { Text(if (transit == dev.localspoof.domain.FlightTransitMode.JUMP) "Jump flight · arrival airport" else "Timed flight", modifier = Modifier.fillMaxWidth().wrapContentHeight().testTag("$tag-label")) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag))
             }
+            Text("Jump flight skips the airborne travel time. Travel to the airport, boarding, confirmed placements and airplane-mode changes still happen.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("flight-transit-explanation"))
+            if (state.phone.snapshot.activePreview != null && state.remainingEdit == null) Text("These options stage your next preview. Use Jump to next stop in the live journey details to jump the current journey when available.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("flight-transit-staged"))
             if (d.flightTransitMode == dev.localspoof.domain.FlightTransitMode.TIMED) PrivateInput(d.flightSpeedText, "Plane speed (${state.preferences.speedUnit.label})", "flight-speed", numeric = true) { event(MobileUiEvent.Edit(MobileField.FLIGHT_SPEED, it)) }
             Text("To destination", style = MaterialTheme.typography.titleMedium)
             FlightGroundChoices(d.arrivalGroundMode, "arrival") { event(MobileUiEvent.ArrivalGroundMode(it)) }
@@ -754,7 +827,7 @@ internal fun mobileSaveDraft(state: MobileUiState): MobileDraft {
         if (preview.routeSource == RouteSource.ONLINE_ROUTER) Text("Online route · ${preview.routeProvider ?: "external router"}. Playback uses validated, snapped route endpoints.")
         if (preview.distanceMeters > 402336 && preview.mode != Mode.FLIGHT) Text("Over 250 miles. Airport journey offers a staged itinerary with ground route coverage.")
         if (preview.mode == Mode.FLIGHT) {
-            Text("${if (preview.departureGroundMode == GroundLegMode.INSTANT) "Instant" else "Drive"} to departure · ${if (preview.flightTransitMode == dev.localspoof.domain.FlightTransitMode.JUMP) "skip flight wait" else "timed simulated flight"} · ${if (preview.arrivalGroundMode == GroundLegMode.INSTANT) "instant" else "drive"} to destination")
+            Text("${if (preview.departureGroundMode == GroundLegMode.INSTANT) "Instant" else "Drive"} to departure · ${if (preview.flightTransitMode == dev.localspoof.domain.FlightTransitMode.JUMP) "jump flight to arrival airport" else "timed simulated flight"} · ${if (preview.arrivalGroundMode == GroundLegMode.INSTANT) "instant" else "drive"} to destination")
             Text("Roads are solid; flight is dashed; instant placements are endpoint markers. Radio and confirmed placement steps remain required.")
         }
         if (preview.stops.isNotEmpty()) Text("${preview.stops.size} planned stops · review and edit the stop list above before Start.")

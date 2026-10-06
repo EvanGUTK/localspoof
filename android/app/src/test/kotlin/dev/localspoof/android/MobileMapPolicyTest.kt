@@ -157,4 +157,76 @@ class MobileMapPolicyTest {
         assertTrue(MobileMapView.isGesture(Uri.parse("https://localspoof.invalid/gesture")))
         assertFalse(MobileMapView.isGesture(Uri.parse("https://localspoof.invalid/gesture?Stop=true")))
     }
+    @Test fun nearbyPinsAreSeparateBoundedNativeBatchMessages() {
+        val batch = "11111111-1111-1111-1111-111111111111"
+        val good = "https://localspoof.invalid/poi?batch=$batch&index=0"
+        assertEquals(NearbyPinClick(batch, 0), MobileMapView.parseNearbyPin(Uri.parse(good)))
+        assertNull(MobileMapView.parseSelection(Uri.parse(good)))
+        listOf(good.replace("https://localspoof.invalid", "https://evil.test"), good.replace("/poi", "/%70oi"), good + "&lat=1", good + "&index=1", good + "#x", good.replace("index=0", "index=8"), good.replace("index=0", "index=-1"), good.replace("index=0", "index=NaN"), good.replace(batch, "old-batch")).forEach { assertNull(MobileMapView.parseNearbyPin(Uri.parse(it))) }
+    }
+    @Test fun nativePoiBridgeRejectsOldBatchesHiddenMapAndClearedResults() {
+        val accepted = mutableListOf<NearbyPinClick>()
+        var destinationCalls = 0
+        val view = MobileMapView(ApplicationProvider.getApplicationContext(), MobileMapNetwork(), poi = accepted::add) { destinationCalls++ }
+        val place = NearbyPlace("Synthetic hotel", GeoPoint(1.0, 2.0), PlaceCategory.HOTEL, 10.0)
+        val first = "11111111-1111-1111-1111-111111111111"
+        val second = "22222222-2222-2222-2222-222222222222"
+        fun click(batch: String, index: Int = 0) {
+            val request = object : android.webkit.WebResourceRequest {
+                override fun getUrl() = Uri.parse("https://localspoof.invalid/poi?batch=$batch&index=$index")
+                override fun isForMainFrame() = true
+                override fun isRedirect() = false
+                override fun hasGesture() = true
+                override fun getMethod() = "GET"
+                override fun getRequestHeaders() = emptyMap<String, String>()
+            }
+            view.webViewClient.shouldOverrideUrlLoading(view, request)
+        }
+        view.updatePlaces(listOf(place), first); click(first)
+        view.updatePlaces(listOf(place), second); click(first); click(second, 7)
+        view.setMapVisible(false); click(second)
+        view.setMapVisible(true); click(second)
+        view.updatePlaces(emptyList(), first); click(first)
+        assertEquals(listOf(NearbyPinClick(first, 0), NearbyPinClick(second, 0)), accepted)
+        assertEquals("Browsing cannot invoke generic map selection", 0, destinationCalls)
+        view.disposeMap(); click(second); assertEquals(2, accepted.size)
+    }
+    @Test fun detailOwnershipExpiresWhenNearbyBatchChanges() {
+        val overlay = MobileMapOverlayState()
+        val place = NearbyPlace("Synthetic hotel", GeoPoint(1.0, 2.0), PlaceCategory.HOTEL, 10.0)
+        overlay.replaceNearby(listOf(place)); val first = NearbyPinClick(overlay.placesBatch, 0)
+        overlay.browse(first); assertEquals(place, overlay.selectedDetail())
+        overlay.replaceNearby(emptyList()); assertNull(overlay.selectedDetail())
+        overlay.replaceNearby(listOf(place)); overlay.browse(first); assertNull(overlay.selectedDetail())
+        overlay.browse(NearbyPinClick(overlay.placesBatch, 7)); assertNull(overlay.selectedDetail())
+        overlay.browse(place); assertEquals(place, overlay.selectedDetail())
+        overlay.dismissDetail(); assertNull(overlay.selectedDetail()); assertEquals(listOf(place), overlay.nearby)
+    }
+
+    @Test fun jumpPresentationRequiresActualPhonePlaybackAndNoHeldEdit() {
+        val snapshot = Coordinator().snapshot().copy(state = SessionState.ACTIVE, mode = Mode.DRIVE, nextStop = JourneyStopTarget(GeoPoint(1.0, 2.0), "Synthetic stop", 0))
+        val healthy = MobileUiState(PhoneView(snapshot, simulationArmed = true, serviceRunning = true))
+        assertNull(mobileJumpBlockReason(healthy))
+        assertTrue(mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(serviceRunning = false)))!!.contains("Phone playback"))
+        assertTrue(mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(simulationArmed = false)))!!.contains("Phone playback"))
+        assertTrue(mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(snapshot = snapshot.copy(editId = "edit"))))!!.contains("Apply or cancel"))
+        assertTrue(mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(snapshot = snapshot.copy(state = SessionState.PAUSED))))!!.contains("Resume"))
+        assertNotNull(mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(snapshot = snapshot.copy(nextStop = null)))))
+        FlightPhase.entries.forEach { phase ->
+            val reason = mobileJumpBlockReason(healthy.copy(phone = healthy.phone.copy(snapshot = snapshot.copy(mode = Mode.FLIGHT, phase = phase))))
+            assertEquals(phase.name, phase !in setOf(FlightPhase.ORIGIN_GROUND, FlightPhase.FLIGHT_INTERVAL, FlightPhase.DESTINATION_GROUND), reason != null)
+        }
+    }
+
+    @Test fun freshJumpFailureExplainsActualBoardingHoldWithoutUsingStaleUi() {
+        val active = Coordinator().snapshot().copy(state = SessionState.ACTIVE, mode = Mode.FLIGHT, phase = FlightPhase.FLIGHT_INTERVAL, nextStop = JourneyStopTarget(GeoPoint(1.0, 2.0), "Arrival airport", 0))
+        val oldUi = MobileUiState(PhoneView(active, simulationArmed = true, serviceRunning = true))
+        assertNull(mobileJumpBlockReason(oldUi))
+        val fresh = oldUi.phone.copy(snapshot = active.copy(phase = FlightPhase.BOARDING, stages = listOf(JourneyStage("Departure airport", "DRIVE", "ACTIVE", 120000))))
+        val reason = mobileJumpBlockReason(fresh)
+        assertTrue(reason!!.contains("120 s remaining")); assertTrue(reason.contains("boarding")); assertFalse(reason.contains("Resume"))
+        assertTrue(mobileJumpBlockReason(fresh, editing = true)!!.contains("Apply or cancel"))
+        assertFalse(mobileJumpBlockReason(fresh.copy(snapshot = fresh.snapshot.copy(stages = emptyList())))!!.contains("s remaining"))
+    }
+
 }

@@ -333,13 +333,30 @@ class MobileRenderedLayoutTest {
     @Test fun phoneLiveJumpShowsNamedConfirmationAndOnlyExplicitConfirmEmitsAction() {
         val events = mutableListOf<MobileUiEvent>()
         val base = Coordinator().snapshot().copy(state = SessionState.ACTIVE, mode = Mode.DRIVE, remainingMs = 120000, remainingMeters = 1000.0, nextStop = JourneyStopTarget(GeoPoint(1.0, 2.0), "Cafe", 0))
-        mount(MobileSection.JOURNEY, Viewport(360, 800, 1f), fixture = PhoneView(base)) { events.add(it) }
+        mount(MobileSection.JOURNEY, Viewport(360, 800, 1f), fixture = PhoneView(base, simulationArmed = true, serviceRunning = true)) { events.add(it) }
         scrollTo("phone-jump-next"); compose.onNodeWithTag("phone-jump-next").performClick()
         compose.onNodeWithText("Jump to Cafe?").assertIsDisplayed()
         assertTrue(events.isEmpty())
         compose.onNodeWithText("Jump", useUnmergedTree = true).performClick()
         assertEquals(listOf(MobileUiEvent.JumpNextStop), events)
         visibleAction("phone-stop")
+    }
+    @Test fun flightJumpWaitsForBoardingAndSettlingBeforeExplicitConfirmation() {
+        val events = mutableListOf<MobileUiEvent>()
+        val base = Coordinator().snapshot().copy(state = SessionState.ACTIVE, mode = Mode.FLIGHT, phase = FlightPhase.BOARDING, nextStop = JourneyStopTarget(GeoPoint(1.0, 2.0), "Arrival airport", 0))
+        val ui = mutableStateOf(MobileUiState(PhoneView(base, simulationArmed = true, serviceRunning = true), section = MobileSection.JOURNEY, draft = MobileDraft(mode = Mode.FLIGHT)))
+        compose.setContent { MaterialTheme { MobileApp(ui.value, events::add, Modifier.fillMaxSize()) } }
+        scrollTo("phone-jump-next"); compose.onNodeWithTag("phone-jump-next").assertIsNotEnabled()
+        compose.onNodeWithTag("phone-jump-reason").performScrollTo().assertTextContains("boarding", substring = true)
+        compose.runOnIdle { ui.value = ui.value.copy(phone = PhoneView(base.copy(phase = FlightPhase.SETTLING), simulationArmed = true, serviceRunning = true)) }
+        compose.onNodeWithTag("phone-jump-next").assertIsNotEnabled()
+        compose.onNodeWithTag("phone-jump-reason").assertTextContains("settle", substring = true)
+        compose.runOnIdle { ui.value = ui.value.copy(phone = PhoneView(base.copy(phase = FlightPhase.FLIGHT_INTERVAL), simulationArmed = true, serviceRunning = true)) }
+        scrollTo("phone-jump-next"); compose.onNodeWithTag("phone-jump-next").assertIsEnabled().performClick()
+        compose.onNodeWithText("Jump to Arrival airport?").assertIsDisplayed(); assertTrue(events.isEmpty())
+        compose.runOnIdle { ui.value = ui.value.copy(phone = PhoneView(base.copy(phase = FlightPhase.BOARDING), simulationArmed = true, serviceRunning = true)) }
+        compose.onNodeWithText("Jump to Arrival airport?").assertDoesNotExist()
+        compose.onNodeWithTag("phone-jump-next").assertIsNotEnabled(); assertTrue(events.isEmpty())
     }
     @Test fun settingsGearOpensConnectionAndSettingsAndBookmarkWithoutSessionMutation() {
         val events = mutableListOf<MobileUiEvent>()
@@ -399,19 +416,37 @@ class MobileRenderedLayoutTest {
         }
         assertTrue("Category discovery and legend cannot emit travel or provider actions", events.isEmpty())
     }
-    @Test fun numberedNearbyResultsStageTheChosenRoleAndNeverStartTravel() {
-        val role = mutableStateOf("Destination")
+    @Test fun numberedNearbyResultsBrowseWithoutStagingTravel() {
+        val point = GeoPoint(1.0, 2.0)
+        val place = NearbyPlace("Synthetic hotel", point, PlaceCategory.HOTEL, 250.0)
+        val browsed = mutableListOf<NearbyPlace>()
+        compose.setContent { MaterialTheme { NearbyResults(MobileUiState(PhoneView(Coordinator().snapshot())), listOf(place), browsed::add) } }
+        compose.onNodeWithTag("nearby-result-0").assertIsDisplayed().performClick()
+        assertEquals(listOf(place), browsed)
+    }
+    @Test fun hotelDetailsRequireExplicitSelectionPreserveCameraAndKeepResultsAfterDismiss() {
+        val overlay = MobileMapOverlayState()
         val events = mutableListOf<MobileUiEvent>()
-        var cleared = 0
-        val point = GeoPoint(41.88, -87.63)
         val state = MobileUiState(PhoneView(Coordinator().snapshot()), draft = MobileDraft(mode = Mode.DRIVE))
-        compose.setContent { MaterialTheme { NearbyResults(state, listOf(NearbyPlace("Synthetic hotel", point, PlaceCategory.HOTEL, 250.0)), role.value, events::add) { cleared++ } } }
-        listOf("Origin", "Destination", "Stop").forEach { chosen ->
-            compose.runOnIdle { role.value = chosen }; compose.waitForIdle()
-            compose.onNodeWithTag("nearby-result-0").assertIsDisplayed().performClick()
-        }
-        assertEquals(listOf(MobileUiEvent.OriginSelected(point, "Synthetic hotel"), MobileUiEvent.PlaceSelected(point, "Synthetic hotel"), MobileUiEvent.AddStop(point, "Synthetic hotel", 0)), events)
-        assertEquals(3, cleared)
+        compose.setContent { MaterialTheme { MapHome(state, mobileLayoutPolicy(384f, 628f, 1f), events::add, Modifier.fillMaxSize(), overlay) } }
+        compose.waitForIdle()
+        val place = NearbyPlace("Synthetic hotel", GeoPoint(1.0, 2.0), PlaceCategory.HOTEL, 250.0)
+        compose.runOnIdle { overlay.viewport = MapViewport(GeoPoint(1.1, 2.1), 15.0); overlay.replaceNearby(listOf(place)) }
+        compose.onNodeWithTag("show-nearby-results").performClick()
+        compose.onNodeWithTag("nearby-result-0").performClick()
+        compose.onNodeWithTag("nearby-detail-name").assertTextEquals("Synthetic hotel")
+        compose.onNodeWithTag("nearby-detail-category").assertTextEquals("Hotels")
+        assertTrue(events.isEmpty()); assertEquals(15.0, overlay.viewport!!.zoom, 0.0); assertEquals(0L, overlay.preserveCameraRevision)
+        compose.onNodeWithTag("nearby-detail-back").performScrollTo().performClick()
+        compose.onNodeWithTag("nearby-result-0").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("nearby-detail-select").performScrollTo().performClick()
+        assertEquals(listOf(MobileUiEvent.PlaceSelected(place.point, place.name)), events)
+        assertEquals(1L, overlay.preserveCameraRevision); assertEquals(listOf(place), overlay.nearby)
+        compose.onNodeWithTag("nearby-detail-sheet").assertDoesNotExist()
+        compose.onNodeWithTag("show-nearby-results").assertIsDisplayed()
+        compose.runOnIdle { overlay.browse(NearbyPinClick(overlay.placesBatch, 0)) }
+        compose.onNodeWithTag("nearby-detail-close").performScrollTo().performClick()
+        assertEquals(1, events.size); assertEquals(listOf(place), overlay.nearby)
     }
     @Test fun normalMapKeepsAtLeastSixtyPercentClearWithCollapsedNearbyResults() {
         val overlay = MobileMapOverlayState()
@@ -427,7 +462,7 @@ class MobileRenderedLayoutTest {
             listOf(false, true).forEach { results ->
                 compose.runOnIdle { ui.value = ui.value.copy(phone = PhoneView(Coordinator().snapshot().copy(state = phase, mode = if (phase == SessionState.IDLE) null else Mode.DRIVE, remainingMs = 600000L), motion = MotionTelemetry(speedMps = 55.88, sampleAgeMs = 200, sampleSequence = 1, health = "LIVE"))) }
                 compose.waitForIdle()
-                compose.runOnIdle { overlay.nearby = if (results) List(8) { NearbyPlace("Synthetic hotel $it", GeoPoint(41.88, -87.63), PlaceCategory.HOTEL, 250.0) } else emptyList() }
+                compose.runOnIdle { overlay.replaceNearby(if (results) List(8) { NearbyPlace("Synthetic hotel $it", GeoPoint(41.88, -87.63), PlaceCategory.HOTEL, 250.0) } else emptyList()) }
                 compose.waitForIdle()
                 val map = rawBounds("phone-live-map"); val top = rawBounds("mobile-map-top-overlay"); val bottom = rawBounds("mobile-map-bottom-overlay"); val key = rawBounds("map-key-toggle")
                 assertTrue("Top and bottom controls cannot overlap", top.bottom <= bottom.top)
@@ -444,7 +479,7 @@ class MobileRenderedLayoutTest {
         val events = mutableListOf<MobileUiEvent>()
         compose.setContent { MaterialTheme { MapHome(MobileUiState(PhoneView(Coordinator().snapshot())), mobileLayoutPolicy(384f, 628f, 1f), events::add, Modifier.fillMaxSize(), overlay) } }
         compose.waitForIdle()
-        compose.runOnIdle { overlay.nearby = List(8) { NearbyPlace("Synthetic hotel $it", GeoPoint(41.88, -87.63), PlaceCategory.HOTEL, 250.0) } }
+        compose.runOnIdle { overlay.replaceNearby(List(8) { NearbyPlace("Synthetic hotel $it", GeoPoint(41.88, -87.63), PlaceCategory.HOTEL, 250.0) }) }
         compose.onNodeWithTag("show-nearby-results").performClick()
         compose.onNodeWithTag("nearby-sheet-stop").assertIsDisplayed()
         compose.onNodeWithTag("nearby-sheet-close").performClick()
