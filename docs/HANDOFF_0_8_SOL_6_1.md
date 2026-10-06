@@ -1,6 +1,16 @@
-# LocalSpoof 0.8 handoff for Sol 6.1
+# LocalSpoof 0.8.2 handoff for Sol 6.1
 
 Implements [105](105.md) on the 0.7 baseline. Current published patch: **0.8.2 / Android code 10**, package `dev.localspoof.android`; protocol minor 6 unchanged. Read [0.8.2 validation](VALIDATION_0_8_2.md) for hotel details/camera preservation and Jump eligibility; [0.8.1 validation](VALIDATION_0_8_1.md) for the idle-location fix and both actual in-app upgrade cycles; and [0.8 foundation validation](VALIDATION_0_8.md) for broader scope and remaining physical checks. Installed Windows/S24 remain 0.8.1 pending a safe-idle upgrade to 0.8.2.
+
+## Resume checklist
+
+Implementation and validation are committed on private `main` as **`402f509` — `fix: preserve hotel browsing and explain jump waits`**. This handoff is a subsequent documentation commit. Pull private `EvanGUTK/localspoof` before resuming on another computer. Source and these reports travel with Git; ignored `.build/107` evidence, installed toolchains, device connections and private signing credentials do not.
+
+1. Read this handoff, [0.8.2 validation](VALIDATION_0_8_2.md), [105](105.md) and the current repository instructions. The published release already passed 285 Android tests, 170 Node tests, 14 native Windows UI checks and 32 anonymous release checks. Do not rebuild or overwrite its immutable release assets merely to resume.
+2. Use OpenMob to list devices and observe the S24's screenshot and visible UI tree before acting. It was offline at the end of this work. Verify installed versions and actual playback/provider/radio state; do not assume the previous Idle state still applies. Upgrade through Gear → Updates only at safe idle, preserving the user's journey and local saves.
+3. Verify **both** requested Jump paths: the Airport Journey's Jump-flight option and the live Jump-to-next-stop/arrival-airport action. The latest user report was an arrival-airport rejection during a configured **120-second boarding hold**. The fix explains the wait and eligibility; it does not bypass that hold or airplane-mode/placement steps. Test with the user's chosen journey, without introducing an unrelated city into their phone history.
+4. On Android, browse a numbered hotel pin and a list entry, inspect details, close/reopen, then explicitly Select. Confirm camera/zoom and results remain, destination is staged, and the approved journey is unchanged until its own explicit apply workflow. Verify Preview/Fit still work deliberately. Windows already passed this provider-backed flow at two window sizes; physical S24 verification remains outstanding.
+5. Record measured device/update outcomes separately from automated evidence. Any new production change needs focused regression coverage, an appropriate final build, review and a new signed release version; retain the original signing identities.
 
 ## Architecture and behavior
 
