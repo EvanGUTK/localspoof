@@ -1,3 +1,11 @@
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0a4d8c,100:0d1117&height=220&section=header&text=LocalSpoof&fontSize=60&fontColor=ffffff&fontAlignY=38&desc=Local%20Android%20location%20simulation.%20No%20accounts.%20No%20telemetry.&descAlignY=60&descSize=20&animation=fadeIn" alt="LocalSpoof" width="100%" />
+
+![Version](https://img.shields.io/badge/Release-0.7.0-0a84ff?style=for-the-badge) ![Android](https://img.shields.io/badge/Android-3DDC84?style=for-the-badge&logo=android&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white) ![Telemetry](https://img.shields.io/badge/Telemetry-None-2ea043?style=for-the-badge)
+
+</div>
+
 # LocalSpoof
 
 Local Android location simulation with a sideloaded APK and a Windows desktop controller. No account, hosted server, cloud storage, ads, fees, automatic location history or application telemetry is implemented. Unsaved journeys stay in RAM. Preferences and explicitly bookmarked places/routes are stored locally; online map/search/routing providers receive the requests needed for those features and may log them.
@@ -39,3 +47,12 @@ Source and handoffs are in the private [EvanGUTK/localspoof](https://github.com/
 Use Node 24+, Java 17, Android SDK 36/build-tools 35.0.0, the Gradle wrapper, Windows MSVC Rust and Tauri CLI. Windows build scripts are `tools/build-android.ps1`, `tools/sign-android.ps1` and `tools/build-desktop.ps1`; the signed companion's expected public certificate fingerprint is supplied to the desktop build. `npm run verify` runs Node/privacy/protocol/asset checks; `npm run typecheck` additionally requires the developer TypeScript toolchain. See the handoff for full Android and Rust checks.
 
 Build caches, `.build/` QA receipts, `.tooling/`, generated release binaries and all signing material are excluded from Git. The Windows installer has no Authenticode publisher signature.
+
+
+---
+
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,100:0a4d8c&height=90&section=footer" alt="" width="100%" />
+
+</div>
